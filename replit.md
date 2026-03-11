@@ -1,49 +1,51 @@
-# Sphere 2048
+# 2048 × Sphere Chain
 
-A 3D take on the classic 2048 game — tiles are placed on a rotating sphere using React Three Fiber and Three.js.
+A fully functional 2048 game with Unicity blockchain integration via the Sphere SDK.
 
 ## Architecture
 
-- **Framework**: React 18 + Vite
-- **3D Engine**: Three.js via @react-three/fiber and @react-three/drei
-- **Language**: JavaScript (JSX)
+- **Runtime**: Node.js 20
+- **Backend**: Express 4 (`index.js`) — serves static files + REST API
+- **Frontend**: Vanilla HTML/CSS/JS (`public/`)
+- **Chain**: Unicity Testnet via `@unicitylabs/sphere-sdk`
 - **Port**: 5000
 
-## Project Structure
+## File Structure
 
 ```
-src/
-  App.jsx               # Root component
-  App.css               # App-level styles
-  index.css             # Global reset styles
-  main.jsx              # Entry point
-  components/
-    GameSphere.jsx      # Three.js Canvas + OrbitControls
-    SphereTile.jsx      # Individual tile rendered on sphere surface
-    HUD.jsx             # Score, buttons, game over overlay
-    HUD.css             # HUD styles
-    ErrorBoundary.jsx   # WebGL fallback
-  hooks/
-    useGame.js          # Game state management
-  utils/
-    gameLogic.js        # Tile positions, adjacency, merge logic
+index.js          → Express server + REST API (game state, move, submit-score)
+game.js           → Pure 2048 game logic (board, moves, merges, score, game-over)
+sphere.js         → Sphere SDK integration (wallet init + score broadcast)
+public/
+  index.html      → Main HTML page (board UI, score display, controls)
+  ui.js           → Frontend controller (API calls, board rendering, keyboard)
+  favicon.svg     → App icon
 ```
 
-## Game Mechanics
+## REST API
 
-- 20 tiles are positioned on a sphere using the Fibonacci/golden angle distribution
-- Adjacency between tiles is computed by nearest-neighbor (k=4)
-- "Merge Tiles" button triggers one merge round: adjacent tiles of equal value merge
-- After each merge, a new random tile (2 or 4) is added
-- Game ends when no merges are possible and the sphere is full
-- Goal: reach the 2048 tile
+| Method | Path                | Description                          |
+|--------|---------------------|--------------------------------------|
+| GET    | `/api/state`        | Get current board + score            |
+| POST   | `/api/new`          | Start a fresh game                   |
+| POST   | `/api/move`         | Apply a move (`{ direction }`)       |
+| POST   | `/api/submit-score` | Submit final score to Unicity chain  |
+| GET    | `/api/sphere-status`| Sphere SDK connection info           |
+
+## Sphere SDK Integration
+
+- Package: `@unicitylabs/sphere-sdk` v0.6.1 + `ws` (Node.js WebSocket)
+- On server start: `createNodeProviders({ network: 'testnet' })` + `Sphere.init({ autoGenerate: true })`
+- Score submission: `sphere.communications.broadcast(JSON.stringify(payload), tags)` — publishes a signed Nostr event to the Unicity relay
+- Wallet mnemonic auto-generated on first run; set `SPHERE_MNEMONIC` env var to reuse a wallet
+- Set `SPHERE_NETWORK` env var to `mainnet` / `testnet` (default) / `dev`
 
 ## Running
 
-```
-npm run dev
+```bash
+node index.js
 ```
 
 ## Deployment
 
-Configured as a static site deployment (Vite build → `dist/` folder).
+Configured as an Autoscale deployment (`node index.js` on port 5000).

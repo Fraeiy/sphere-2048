@@ -1,24 +1,16 @@
 {
   "name": "sphere-2048",
-  "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
+  "description": "2048 game with Sphere SDK (Unicity blockchain) integration",
   "type": "module",
+  "main": "index.js",
   "scripts": {
-    "dev": "vite --host 0.0.0.0 --port 5000",
-    "build": "vite build",
-    "preview": "vite preview"
+    "start": "node index.js",
+    "dev": "node --watch index.js"
   },
   "dependencies": {
-    "@react-three/drei": "^9.122.0",
-    "@react-three/fiber": "^8.18.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "three": "^0.170.0"
-  },
-  "devDependencies": {
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "@vitejs/plugin-react": "^4.7.0",
-    "vite": "^6.4.1"
+    "@unicitylabs/sphere-sdk": "^0.6.1",
+    "express": "^4.22.1",
+    "ws": "^8.19.0"
   }
 }

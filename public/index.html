@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>2048 × Sphere Chain</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <style>
+    /* ── Reset & Base ─────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      background: #faf8ef;
+      color: #776e65;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 20px 12px 40px;
+    }
+
+    /* ── Header ───────────────────────────────────────────── */
+    .header {
+      width: 100%;
+      max-width: 500px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      margin-bottom: 16px;
+    }
+    .title { font-size: 3.5rem; font-weight: 900; color: #776e65; line-height: 1; }
+    .title span { color: #edc22e; }
+    .scores { display: flex; gap: 8px; }
+    .score-box {
+      background: #bbada0;
+      border-radius: 6px;
+      padding: 6px 14px;
+      text-align: center;
+      min-width: 72px;
+    }
+    .score-box .label {
+      display: block;
+      font-size: 0.62rem;
+      font-weight: 700;
+      color: #eee4da;
+      letter-spacing: 1px;
+      margin-bottom: 2px;
+    }
+    .score-box .value {
+      display: block;
+      font-size: 1.35rem;
+      font-weight: 900;
+      color: #fff;
+    }
+
+    /* ── Controls ─────────────────────────────────────────── */
+    .controls {
+      width: 100%;
+      max-width: 500px;
+      display: flex;
+      gap: 10px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+    .btn {
+      padding: 10px 20px;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      font-weight: 700;
+      cursor: pointer;
+      transition: opacity .15s, transform .1s;
+    }
+    .btn:active { transform: scale(.96); }
+    .btn-new     { background: #8f7a66; color: #fff; }
+    .btn-submit  { background: #edc22e; color: #fff; flex: 1; }
+    .btn-submit:disabled { opacity: .45; cursor: not-allowed; }
+    .btn:hover:not(:disabled) { opacity: .88; }
+
+    /* ── Board ────────────────────────────────────────────── */
+    .board-wrap {
+      background: #bbada0;
+      border-radius: 8px;
+      padding: 10px;
+      width: 100%;
+      max-width: 500px;
+      aspect-ratio: 1;
+    }
+    .board {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows:    repeat(4, 1fr);
+      gap: 10px;
+      width: 100%;
+      height: 100%;
+    }
+    .cell {
+      background: rgba(238,228,218,.35);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.8rem;
+      font-weight: 900;
+      transition: background .12s, color .12s, transform .1s;
+    }
+    /* Tile colours matching the original 2048 palette */
+    .cell[data-v="2"]    { background:#eee4da; color:#776e65; }
+    .cell[data-v="4"]    { background:#ede0c8; color:#776e65; }
+    .cell[data-v="8"]    { background:#f2b179; color:#f9f6f2; }
+    .cell[data-v="16"]   { background:#f59563; color:#f9f6f2; }
+    .cell[data-v="32"]   { background:#f67c5f; color:#f9f6f2; }
+    .cell[data-v="64"]   { background:#f65e3b; color:#f9f6f2; }
+    .cell[data-v="128"]  { background:#edcf72; color:#f9f6f2; font-size:1.5rem; }
+    .cell[data-v="256"]  { background:#edcc61; color:#f9f6f2; font-size:1.5rem; }
+    .cell[data-v="512"]  { background:#edc850; color:#f9f6f2; font-size:1.5rem; }
+    .cell[data-v="1024"] { background:#edc53f; color:#f9f6f2; font-size:1.2rem; }
+    .cell[data-v="2048"] { background:#edc22e; color:#f9f6f2; font-size:1.2rem; }
+
+    /* ── Message ──────────────────────────────────────────── */
+    .message {
+      margin-top: 14px;
+      width: 100%;
+      max-width: 500px;
+      min-height: 44px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: #776e65;
+      background: #eee4da;
+      border-radius: 6px;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .message.ok   { background: #d4edda; color: #155724; }
+    .message.err  { background: #f8d7da; color: #721c24; }
+    .message.warn { background: #fff3cd; color: #856404; }
+    .dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: currentColor;
+    }
+
+    /* ── Sphere status pill ───────────────────────────────── */
+    .sphere-pill {
+      margin-top: 14px;
+      width: 100%;
+      max-width: 500px;
+      font-size: 0.78rem;
+      background: #f3f0e9;
+      border-radius: 6px;
+      padding: 10px 14px;
+      color: #888;
+      line-height: 1.6;
+    }
+    .sphere-pill strong { color: #776e65; }
+
+    /* ── Overlay ──────────────────────────────────────────── */
+    .overlay {
+      display: none;
+      position: fixed; inset: 0;
+      background: rgba(250,248,239,.88);
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+    .overlay.active { display: flex; }
+    .overlay-box {
+      background: #fff;
+      border-radius: 12px;
+      padding: 40px 52px;
+      text-align: center;
+      box-shadow: 0 8px 32px rgba(0,0,0,.15);
+    }
+    .overlay-box h2 { font-size: 2rem; color: #776e65; margin-bottom: 8px; }
+    .overlay-box p  { color: #999; margin-bottom: 24px; font-size: 1rem; }
+
+    /* ── Mobile arrow pad ─────────────────────────────────── */
+    .arrow-pad {
+      display: grid;
+      grid-template-areas:
+        ". up ."
+        "left down right";
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      margin-top: 16px;
+      width: 100%;
+      max-width: 180px;
+    }
+    .arrow-pad button {
+      width: 52px; height: 52px;
+      border-radius: 8px;
+      border: none;
+      background: #bbada0;
+      color: #fff;
+      font-size: 1.4rem;
+      cursor: pointer;
+      justify-self: center;
+      display: flex; align-items: center; justify-content: center;
+      transition: background .1s, transform .1s;
+    }
+    .arrow-pad button:active { background: #8f7a66; transform: scale(.93); }
+    .arrow-pad .up    { grid-area: up;    }
+    .arrow-pad .left  { grid-area: left;  }
+    .arrow-pad .down  { grid-area: down;  }
+    .arrow-pad .right { grid-area: right; }
+
+    /* ── Hint text ────────────────────────────────────────── */
+    .hint { margin-top: 10px; font-size: .78rem; color: #bbb; text-align: center; }
+  </style>
+</head>
+<body>
+
+  <!-- ── Header: Title + Score Boxes ──────────────────────────────────────── -->
+  <div class="header">
+    <div>
+      <h1 class="title">20<span>48</span></h1>
+      <p style="font-size:.8rem;margin-top:4px;">× Sphere Chain</p>
+    </div>
+    <div class="scores">
+      <div class="score-box">
+        <span class="label">SCORE</span>
+        <span class="value" id="score">0</span>
+      </div>
+      <div class="score-box">
+        <span class="label">BEST</span>
+        <span class="value" id="best">0</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Action Buttons ────────────────────────────────────────────────────── -->
+  <div class="controls">
+    <button class="btn btn-new"    id="btnNew">New Game</button>
+    <button class="btn btn-submit" id="btnSubmit" disabled title="Submit your final score to the Unicity blockchain">
+      ⛓ Submit Score to Chain
+    </button>
+  </div>
+
+  <!-- ── 4×4 Game Board ────────────────────────────────────────────────────── -->
+  <div class="board-wrap">
+    <div class="board" id="board">
+      <!-- 16 cells rendered by ui.js -->
+    </div>
+  </div>
+
+  <!-- ── Mobile Arrow Pad ──────────────────────────────────────────────────── -->
+  <div class="arrow-pad">
+    <button class="up"    data-dir="up">↑</button>
+    <button class="left"  data-dir="left">←</button>
+    <button class="down"  data-dir="down">↓</button>
+    <button class="right" data-dir="right">→</button>
+  </div>
+  <p class="hint">Use arrow keys or buttons to move tiles.</p>
+
+  <!-- ── Status Message ────────────────────────────────────────────────────── -->
+  <div class="message" id="message">
+    <div class="dot"></div>
+    <span id="messageText">Loading game…</span>
+  </div>
+
+  <!-- ── Sphere Status Pill ────────────────────────────────────────────────── -->
+  <div class="sphere-pill" id="spherePill">
+    <strong>⛓ Sphere:</strong> Connecting to Unicity blockchain…
+  </div>
+
+  <!-- ── Game-Over / Win Overlay ───────────────────────────────────────────── -->
+  <div class="overlay" id="overlay">
+    <div class="overlay-box">
+      <h2 id="overlayTitle">Game Over</h2>
+      <p  id="overlayMsg">No moves left!</p>
+      <button class="btn btn-new" id="btnNewOverlay">Play Again</button>
+    </div>
+  </div>
+
+  <!-- ── Frontend Logic ────────────────────────────────────────────────────── -->
+  <script type="module" src="ui.js"></script>
+</body>
+</html>
