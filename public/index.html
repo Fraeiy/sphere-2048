@@ -30,6 +30,7 @@
     }
     .title { font-size: 3.5rem; font-weight: 900; color: #776e65; line-height: 1; }
     .title span { color: #edc22e; }
+    .subtitle { font-size: .8rem; margin-top: 4px; color: #776e65; }
     .scores { display: flex; gap: 8px; }
     .score-box {
       background: #bbada0;
@@ -209,6 +210,10 @@
 
     /* ── Hint text ────────────────────────────────────────── */
     .hint { margin-top: 10px; font-size: .78rem; color: #bbb; text-align: center; }
+
+    /* ── Wallet Info ───────────────────────────────────────── */
+    #walletInfo { display: none; }
+    #walletInfo.active { display: block; }
   </style>
 </head>
 <body>
@@ -217,7 +222,7 @@
   <div class="header">
     <div>
       <h1 class="title">20<span>48</span></h1>
-      <p style="font-size:.8rem;margin-top:4px;">× Sphere Chain</p>
+      <p class="subtitle">× Sphere Chain</p>
     </div>
     <div class="scores">
       <div class="score-box">
@@ -233,10 +238,16 @@
 
   <!-- ── Action Buttons ────────────────────────────────────────────────────── -->
   <div class="controls">
+    <button class="btn btn-new"    id="btnConnectWallet">🔗 Connect Wallet</button>
     <button class="btn btn-new"    id="btnNew">New Game</button>
     <button class="btn btn-submit" id="btnSubmit" disabled title="Submit your final score to the Unicity blockchain">
       ⛓ Submit Score to Chain
     </button>
+  </div>
+
+  <!-- ── Wallet Balance Display ────────────────────────────────────────────── -->
+  <div class="sphere-pill" id="walletInfo">
+    <strong>💰 Balance:</strong> <span id="walletBalance">0 UTC</span>
   </div>
 
   <!-- ── 4×4 Game Board ────────────────────────────────────────────────────── -->

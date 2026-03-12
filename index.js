@@ -29,6 +29,19 @@ const __dirname  = dirname(__filename);
 const app  = express();
 const PORT = 5000;
 
+// ─── Global Error Handlers ────────────────────────────────────────────────────
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[Server] Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// Handle uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('[Server] Uncaught Exception:', error);
+  process.exit(1);
+});
+
 // Parse JSON request bodies
 app.use(express.json());
 
