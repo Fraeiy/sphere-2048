@@ -239,15 +239,20 @@
   <!-- ── Action Buttons ────────────────────────────────────────────────────── -->
   <div class="controls">
     <button class="btn btn-new"    id="btnConnectWallet">🔗 Connect Wallet</button>
+    <button class="btn btn-new"    id="btnDeposit" style="display: none;">💰 Deposit (100 UTC)</button>
     <button class="btn btn-new"    id="btnNew">New Game</button>
-    <button class="btn btn-submit" id="btnSubmit" disabled title="Submit your final score to the Unicity blockchain">
-      ⛓ Submit Score to Chain
-    </button>
   </div>
 
   <!-- ── Wallet Balance Display ────────────────────────────────────────────── -->
-  <div class="sphere-pill" id="walletInfo">
-    <strong>💰 Balance:</strong> <span id="walletBalance">0 UTC</span>
+  <div class="sphere-pill" id="walletInfo" style="display: none;">
+    <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div>
+        <strong>💰 Wallet Balance:</strong> <span id="walletBalance">0.00 UTC</span>
+      </div>
+      <div>
+        <strong>🎮 In-Game Balance:</strong> <span id="gameDeposit">0 UTC</span>
+      </div>
+    </div>
   </div>
 
   <!-- ── 4×4 Game Board ────────────────────────────────────────────────────── -->

@@ -200,9 +200,18 @@ export class GameState {
     this.gameOver = false;
     this.won      = false;
 
-    // Spawn two starting tiles
-    spawnTile(this.board);
-    spawnTile(this.board);
+    // Spawn two starting tiles (always 2s, not random)
+    const empty = getEmptyCells(this.board);
+    if (empty.length >= 2) {
+      // Get two random empty cells
+      const shuffled = empty.sort(() => Math.random() - 0.5);
+      this.board[shuffled[0][0]][shuffled[0][1]] = 2;
+      this.board[shuffled[1][0]][shuffled[1][1]] = 2;
+    } else {
+      // Fallback to spawnTile if not enough empty cells (shouldn't happen)
+      spawnTile(this.board);
+      spawnTile(this.board);
+    }
   }
 
   /**

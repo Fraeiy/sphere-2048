@@ -16,49 +16,210 @@
 
 // ─── Sphere Wallet Integration ────────────────────────────────────────────────
 
+// Based on Boxy-Run implementation: https://unicitynetwork.github.io/Boxy-Run/
+// Uses https://sphere.unicity.network (not unicity-connect:// protocol)
 const WALLET_URL = 'https://sphere.unicity.network';
-const GAME_TREASURY_ADDRESS = 'sphere1treasury2048'; // Replace with actual treasury address
+const GAME_TREASURY_ADDRESS = '@sphere2048'; // Use @nametag format like Boxy-Run uses @boxyrun
 const MOVE_COST_UTC = 1; // Cost per move in UTC
 const DEPOSIT_AMOUNT = 100; // Initial deposit amount in UTC
+const COIN_ID = 'UCT';
+const UCT_COIN_ID_HEX = '455ad8720656b08e8dbd5bac1f3c73eeea5431565f6c1c3af742b1aa12d41d89';
+const UCT_DECIMALS = 18;
+const SESSION_KEY = 'sphere2048-session';
+const DEPOSIT_KEY = 'sphere2048-deposit-paid';
+const HOST_READY_TYPE = 'sphere-connect:host-ready';
+const HOST_READY_TIMEOUT = 30000;
 
 /** @type {any} */
 let sphereClient = null;
+let transport = null;
+let popupWindow = null;
+let uctCoinId = null;
+let uctDecimals = UCT_DECIMALS;
 
 /** @type {object | null} */
 let walletIdentity = null;
 
 /** @type {number} */
-let utcBalance = 0;
+let utcBalance = 0; // Wallet balance
+
+/** @type {number} */
+let gameDepositBalance = 0; // In-game deposit balance (deducted per move)
+
+/** @type {number} */
+let moveCount = 0; // Track moves for auto-submit
+
+/** @type {number} */
+const AUTO_SUBMIT_MOVE_COUNT = 10; // Auto-submit after this many moves
 
 /** @type {boolean} */
 let isConnected = false;
 
 /**
- * Connects to Sphere wallet via popup + postMessage.
+ * Check if running in iframe (based on Boxy-Run and SDK example)
+ */
+function isInIframe() {
+  try {
+    return window.parent !== window && window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Check if Sphere extension is installed (based on Boxy-Run and SDK example)
+ */
+function hasExtension() {
+  try {
+    const sphere = window.sphere;
+    if (!sphere || typeof sphere !== 'object') return false;
+    const isInstalled = sphere.isInstalled;
+    if (typeof isInstalled !== 'function') return false;
+    return isInstalled() === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Wait for wallet host to be ready (based on Boxy-Run implementation)
+ */
+function waitForHostReady() {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      window.removeEventListener('message', handler);
+      reject(new Error('Wallet did not respond in time'));
+    }, HOST_READY_TIMEOUT);
+    
+    function handler(event) {
+      if (event.origin !== WALLET_URL) return;
+      if (event.data?.type === HOST_READY_TYPE) {
+        clearTimeout(timeout);
+        window.removeEventListener('message', handler);
+        resolve();
+      }
+    }
+    window.addEventListener('message', handler);
+  });
+}
+
+/**
+ * Connects to Sphere wallet via popup/iframe/extension (based on Boxy-Run and SDK example).
+ * Uses https://sphere.unicity.network (not unicity-connect:// protocol)
+ * Supports iframe mode, extension mode, and popup mode
  * @returns {Promise<boolean>}
  */
 async function connectWallet() {
   try {
     showMessage('Opening Sphere wallet…', 'warn');
 
-    const popup = window.open(
-      WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin),
+    // dApp metadata for Sphere Connect protocol
+    const dappMeta = {
+      name: '2048 × Sphere',
+      description: '2048 game with Unicity blockchain integration',
+      url: location.origin
+    };
+
+    // Check for iframe mode first (like Boxy-Run and SDK example)
+    if (isInIframe()) {
+      // In iframe mode, use window.parent for communication
+      return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+          showMessage('❌ Wallet connection timeout in iframe mode.', 'err');
+          resolve(false);
+        }, 30000);
+
+        const handleMessage = (event) => {
+          if (event.origin !== WALLET_URL) return;
+
+          const msg = event.data;
+          if (msg && msg.ns === 'sphere-connect' && msg.v === '1.0') {
+            if (msg.type === 'handshake' && msg.direction === 'response') {
+              clearTimeout(timeout);
+              window.removeEventListener('message', handleMessage);
+
+              if (msg.sessionId && msg.identity) {
+                walletIdentity = msg.identity;
+                isConnected = true;
+                if (msg.sessionId) {
+                  sessionStorage.setItem(SESSION_KEY, msg.sessionId);
+                }
+                const displayName = walletIdentity.nametag || walletIdentity.address?.slice(0, 20) || 'Sphere Wallet';
+                showMessage(`✅ Connected to ${displayName}…`, 'ok');
+                updateWalletUI();
+                checkBalance().catch(err => console.error('Balance check failed:', err));
+                resolve(true);
+              } else {
+                showMessage('❌ Wallet connection rejected', 'err');
+                resolve(false);
+              }
+            }
+          }
+        };
+
+        window.addEventListener('message', handleMessage);
+
+        // Send handshake to parent window
+        const resumeSessionId = sessionStorage.getItem(SESSION_KEY) ?? undefined;
+        window.parent.postMessage({
+          ns: 'sphere-connect',
+          v: '1.0',
+          type: 'handshake',
+          direction: 'request',
+          permissions: ['identity:read', 'balance:read', 'tokens:read', 'transfer:request'],
+          dapp: dappMeta,
+          ...(resumeSessionId ? { sessionId: resumeSessionId } : {})
+        }, WALLET_URL);
+      });
+    }
+
+    // Check for extension mode (like Boxy-Run and SDK example)
+    if (hasExtension()) {
+      // Extension mode would use ExtensionTransport, but for now we'll fall through to popup
+      console.log('[Wallet] Extension detected but using popup mode');
+    }
+
+    // Popup mode (default)
+    // Close existing popup if any
+    if (popupWindow && !popupWindow.closed) {
+      popupWindow.close();
+    }
+
+    // Open wallet popup using https:// (not unicity-connect://)
+    const connectUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
+    popupWindow = window.open(
+      connectUrl,
       'sphere-wallet',
       'width=420,height=650'
     );
 
-    if (!popup) {
-      showMessage('⚠️  Popup blocked. Please allow popups for sphere.unicity.network', 'err');
+    if (!popupWindow) {
+      showMessage('⚠️  Popup blocked. Please allow popups for ' + WALLET_URL, 'err');
       return false;
     }
 
-    // Wait for wallet to send back connection data via postMessage
+    // Wait for wallet host to be ready (like Boxy-Run does)
+    try {
+      await waitForHostReady();
+    } catch (err) {
+      showMessage('❌ Wallet connection timeout. Please check if the wallet service is accessible.', 'err');
+      if (!popupWindow.closed) popupWindow.close();
+      return false;
+    }
+
+    // Now send handshake using Sphere Connect protocol
+    const resumeSessionId = sessionStorage.getItem(SESSION_KEY) ?? undefined;
+
     return new Promise((resolve) => {
+      let resolved = false;
       const timeout = setTimeout(() => {
-        showMessage('⏱️  Wallet connection timeout', 'err');
-        popup.close();
-        resolve(false);
-      }, 30000); // 30 second timeout
+        if (!resolved) {
+          resolved = true;
+          showMessage('❌ Wallet connection timeout.', 'err');
+          if (!popupWindow.closed) popupWindow.close();
+          resolve(false);
+        }
+      }, 30000);
 
       const handleMessage = (event) => {
         // Verify origin for security
@@ -67,27 +228,70 @@ async function connectWallet() {
           return;
         }
 
-        if (event.data.type === 'sphere:connect') {
-          clearTimeout(timeout);
-          window.removeEventListener('message', handleMessage);
+        // Check for Sphere Connect protocol messages
+        const msg = event.data;
+        if (msg && msg.ns === 'sphere-connect' && msg.v === '1.0') {
+          if (msg.type === 'handshake' && msg.direction === 'response') {
+            if (!resolved) {
+              resolved = true;
+              clearTimeout(timeout);
+              window.removeEventListener('message', handleMessage);
 
-          if (event.data.success) {
-            walletIdentity = event.data.identity;
-            isConnected = true;
-            popup.close();
+              if (msg.sessionId && msg.identity) {
+                walletIdentity = msg.identity;
+                isConnected = true;
+                if (msg.sessionId) {
+                  sessionStorage.setItem(SESSION_KEY, msg.sessionId);
+                }
 
-            showMessage(`✅ Connected to ${walletIdentity.address?.slice(0, 20) || 'Sphere Wallet'}…`, 'ok');
-            checkBalance().catch(err => console.error('Balance check failed:', err));
-            resolve(true);
-          } else {
-            showMessage(`❌ Wallet connection rejected: ${event.data.error || 'Unknown error'}`, 'err');
-            popup.close();
-            resolve(false);
+                const displayName = walletIdentity.nametag || walletIdentity.address?.slice(0, 20) || 'Sphere Wallet';
+                showMessage(`✅ Connected to ${displayName}…`, 'ok');
+                updateWalletUI();
+                checkBalance().catch(err => console.error('Balance check failed:', err));
+                resolve(true);
+              } else {
+                showMessage('❌ Wallet connection rejected', 'err');
+                if (!popupWindow.closed) popupWindow.close();
+                resolve(false);
+              }
+            }
+          } else if (msg.type === 'response' && msg.error) {
+            if (!resolved) {
+              resolved = true;
+              clearTimeout(timeout);
+              window.removeEventListener('message', handleMessage);
+              showMessage(`❌ Wallet error: ${msg.error.message || 'Unknown error'}`, 'err');
+              if (!popupWindow.closed) popupWindow.close();
+              resolve(false);
+            }
           }
         }
       };
 
       window.addEventListener('message', handleMessage);
+
+      // Send handshake request
+      popupWindow.postMessage({
+        ns: 'sphere-connect',
+        v: '1.0',
+        type: 'handshake',
+        direction: 'request',
+        permissions: ['identity:read', 'balance:read', 'tokens:read', 'transfer:request'],
+        dapp: dappMeta,
+        ...(resumeSessionId ? { sessionId: resumeSessionId } : {})
+      }, WALLET_URL);
+
+      // Monitor popup for closure
+      const checkInterval = setInterval(() => {
+        if (popupWindow.closed && !resolved) {
+          clearInterval(checkInterval);
+          resolved = true;
+          clearTimeout(timeout);
+          window.removeEventListener('message', handleMessage);
+          showMessage('❌ Wallet popup was closed', 'err');
+          resolve(false);
+        }
+      }, 1000);
     });
   } catch (err) {
     console.error('[Wallet] Connection error:', err);
@@ -97,27 +301,101 @@ async function connectWallet() {
 }
 
 /**
- * Checks UTC balance from the wallet.
- * For now, returns a mock balance. In production, this would query the wallet.
+ * Checks UTC balance from the wallet (based on Boxy-Run implementation).
+ * Works in iframe, extension, and popup modes.
  * @returns {Promise<void>}
  */
 async function checkBalance() {
   if (!isConnected) {
     utcBalance = 0;
+    updateBalanceDisplay();
     return;
   }
 
   try {
-    // Mock balance for demo - in production, query the actual wallet
-    utcBalance = DEPOSIT_AMOUNT;
-    updateBalanceDisplay();
+    return new Promise((resolve) => {
+      // Generate request ID first
+      const balanceRequestId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+      
+      const timeout = setTimeout(() => {
+        window.removeEventListener('message', handleMessage);
+        console.error('Balance query timeout');
+        utcBalance = null;
+        updateBalanceDisplay();
+        resolve();
+      }, 30000);
+
+      const handleMessage = (event) => {
+        if (event.origin !== WALLET_URL) return;
+
+        const msg = event.data;
+        if (msg && msg.ns === 'sphere-connect' && msg.v === '1.0') {
+          if (msg.type === 'response' && msg.id === balanceRequestId) {
+            clearTimeout(timeout);
+            window.removeEventListener('message', handleMessage);
+
+            if (msg.error) {
+              console.error('Balance query failed:', msg.error);
+              utcBalance = null;
+            } else if (Array.isArray(msg.result)) {
+              // Find UCT in assets array
+              const uct = msg.result.find(a => a.symbol === COIN_ID);
+              if (uct) {
+                uctCoinId = uct.coinId;
+                uctDecimals = uct.decimals || UCT_DECIMALS;
+                utcBalance = Number(uct.totalAmount) / Math.pow(10, uctDecimals);
+              } else {
+                uctCoinId = UCT_COIN_ID_HEX;
+                uctDecimals = UCT_DECIMALS;
+                utcBalance = 0;
+              }
+            } else {
+              utcBalance = 0;
+            }
+            updateBalanceDisplay();
+            resolve();
+          }
+        }
+      };
+
+      window.addEventListener('message', handleMessage);
+
+      // Determine target window based on connection mode
+      let targetWindow;
+      if (isInIframe()) {
+        targetWindow = window.parent;
+      } else if (popupWindow && !popupWindow.closed) {
+        targetWindow = popupWindow;
+      } else {
+        console.error('No valid target window for balance query');
+        clearTimeout(timeout);
+        window.removeEventListener('message', handleMessage);
+        utcBalance = null;
+        updateBalanceDisplay();
+        resolve();
+        return;
+      }
+
+      // Send balance query using Sphere Connect protocol
+      targetWindow.postMessage({
+        ns: 'sphere-connect',
+        v: '1.0',
+        type: 'request',
+        id: balanceRequestId,
+        method: 'sphere_getBalance',
+        params: {}
+      }, WALLET_URL);
+    });
   } catch (err) {
     console.error('Balance check failed:', err);
+    utcBalance = null;
+    updateBalanceDisplay();
   }
 }
 
 /**
- * Deposits UTC tokens to play the game.
+ * Deposits UTC tokens to play the game (based on Boxy-Run implementation).
+ * Uses Sphere Connect intent protocol.
  * @returns {Promise<boolean>}
  */
 async function depositToPlay() {
@@ -126,42 +404,109 @@ async function depositToPlay() {
     return false;
   }
 
-  try {
-    showMessage(`Requesting deposit of ${DEPOSIT_AMOUNT} UTC…`, 'warn');
+  if (!walletIdentity?.nametag) {
+    showMessage('❌ Unicity ID required. Please register a Unicity ID in Sphere to play.', 'err');
+    return false;
+  }
 
-    // Send intent to wallet via postMessage
-    const popup = window.open(
-      WALLET_URL + `/intent/send?amount=${DEPOSIT_AMOUNT}&recipient=${GAME_TREASURY_ADDRESS}&coinId=UTC`,
-      'sphere-intent',
+  if (utcBalance !== null && utcBalance < DEPOSIT_AMOUNT) {
+    showMessage(`❌ Insufficient wallet balance. You need at least ${DEPOSIT_AMOUNT} ${COIN_ID} in your wallet.`, 'err');
+    return false;
+  }
+
+  // Determine target window for deposit
+  let targetWindow;
+  if (isInIframe()) {
+    targetWindow = window.parent;
+  } else if (popupWindow && !popupWindow.closed) {
+    targetWindow = popupWindow;
+  } else {
+    // Open new popup for deposit if not already open
+    const depositUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
+    popupWindow = window.open(
+      depositUrl,
+      'sphere-wallet',
       'width=420,height=650'
     );
+    if (!popupWindow) {
+      showMessage('⚠️  Popup blocked. Please allow popups for ' + WALLET_URL, 'err');
+      return false;
+    }
+    // Wait for wallet to be ready
+    try {
+      await waitForHostReady();
+    } catch (err) {
+      showMessage('❌ Wallet connection timeout.', 'err');
+      if (!popupWindow.closed) popupWindow.close();
+      return false;
+    }
+    targetWindow = popupWindow;
+  }
+
+  try {
+    showMessage(`Opening wallet to deposit ${DEPOSIT_AMOUNT} ${COIN_ID}… Please sign the transaction.`, 'warn');
+
+    if (!uctCoinId) {
+      uctCoinId = UCT_COIN_ID_HEX;
+      uctDecimals = UCT_DECIMALS;
+    }
 
     return new Promise((resolve) => {
+      let resolved = false;
       const timeout = setTimeout(() => {
-        popup?.close();
-        resolve(false);
-      }, 60000); // 60 second timeout
+        if (!resolved) {
+          resolved = true;
+          showMessage('❌ Deposit timeout', 'err');
+          resolve(false);
+        }
+      }, 120000); // 120 second timeout for intents
 
       const handleMessage = (event) => {
         if (event.origin !== WALLET_URL) return;
 
-        if (event.data.type === 'sphere:intent-result') {
-          clearTimeout(timeout);
-          window.removeEventListener('message', handleMessage);
-          popup?.close();
+        const msg = event.data;
+        if (msg && msg.ns === 'sphere-connect' && msg.v === '1.0') {
+          if (msg.type === 'intent_result') {
+            if (!resolved) {
+              resolved = true;
+              clearTimeout(timeout);
+              window.removeEventListener('message', handleMessage);
 
-          if (event.data.success) {
-            showMessage(`✅ Deposited ${DEPOSIT_AMOUNT} UTC!`, 'ok');
-            checkBalance().catch(err => console.error('Balance check failed:', err));
-            resolve(true);
-          } else {
-            showMessage(`❌ Deposit failed: ${event.data.error || 'User rejected'}`, 'err');
-            resolve(false);
+              if (msg.error) {
+                showMessage(`❌ Deposit failed: ${msg.error.message || 'User rejected'}`, 'err');
+                resolve(false);
+              } else {
+                // Add to in-game deposit balance
+                gameDepositBalance += DEPOSIT_AMOUNT;
+                moveCount = 0; // Reset move count on new deposit
+                showMessage(`✅ Deposited ${DEPOSIT_AMOUNT} ${COIN_ID}! In-game balance: ${gameDepositBalance} UTC`, 'ok');
+                sessionStorage.setItem(DEPOSIT_KEY, 'true');
+                updateBalanceDisplay();
+                checkBalance().catch(err => console.error('Balance check failed:', err));
+                resolve(true);
+              }
+            }
           }
         }
       };
 
       window.addEventListener('message', handleMessage);
+
+      // Send intent using Sphere Connect protocol (like Boxy-Run)
+      const intentId = `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+      targetWindow.postMessage({
+        ns: 'sphere-connect',
+        v: '1.0',
+        type: 'intent',
+        id: intentId,
+        action: 'send',
+        params: {
+          to: GAME_TREASURY_ADDRESS,
+          amount: DEPOSIT_AMOUNT,
+          coinId: uctCoinId,
+          memo: '2048 game deposit'
+        }
+      }, WALLET_URL);
     });
   } catch (err) {
     showMessage(`❌ Deposit failed: ${err.message}`, 'err');
@@ -170,20 +515,22 @@ async function depositToPlay() {
 }
 
 /**
- * Charges one move to the player's wallet.
+ * Charges one move from the in-game deposit balance.
  * @returns {Promise<boolean>}
  */
 async function chargeMoveToWallet() {
   if (!isConnected) return false;
-  if (utcBalance < MOVE_COST_UTC) {
-    showMessage(`❌ Insufficient balance. Need ${MOVE_COST_UTC} UTC, have ${utcBalance}`, 'err');
+  
+  // Check in-game deposit balance, not wallet balance
+  if (gameDepositBalance < MOVE_COST_UTC) {
+    showMessage(`❌ Insufficient in-game balance. Need ${MOVE_COST_UTC} UTC, have ${gameDepositBalance}. Please deposit more.`, 'err');
     return false;
   }
 
   try {
-    // For now, just deduct locally without wallet interaction
-    // In production, this would send an intent to the wallet
-    utcBalance -= MOVE_COST_UTC;
+    // Deduct from in-game deposit balance
+    gameDepositBalance -= MOVE_COST_UTC;
+    moveCount++;
     updateBalanceDisplay();
     return true;
   } catch (err) {
@@ -195,9 +542,53 @@ async function chargeMoveToWallet() {
 /** Updates balance display in the UI */
 function updateBalanceDisplay() {
   const balanceEl = document.getElementById('walletBalance');
+  const depositEl = document.getElementById('gameDeposit');
   if (balanceEl) {
-    balanceEl.textContent = `${utcBalance} UTC`;
+    balanceEl.textContent = `${utcBalance !== null ? utcBalance.toFixed(2) : '0.00'} UTC`;
   }
+  if (depositEl) {
+    depositEl.textContent = `${gameDepositBalance} UTC`;
+  }
+}
+
+/** Updates UI after wallet connection */
+function updateWalletUI() {
+  const connectBtn = document.getElementById('btnConnectWallet');
+  const depositBtn = document.getElementById('btnDeposit');
+  const walletInfoEl = document.getElementById('walletInfo');
+  
+  if (isConnected) {
+    // Hide connect button
+    if (connectBtn) {
+      connectBtn.style.display = 'none';
+    }
+    // Show deposit button (always available after connection)
+    if (depositBtn) {
+      depositBtn.style.display = 'block';
+      depositBtn.disabled = false;
+      depositBtn.textContent = `💰 Deposit (${DEPOSIT_AMOUNT} UTC)`;
+    }
+    // Show wallet info
+    if (walletInfoEl) {
+      walletInfoEl.style.display = 'block';
+      walletInfoEl.classList.add('active');
+    }
+  } else {
+    // Show connect button
+    if (connectBtn) {
+      connectBtn.style.display = 'block';
+    }
+    // Hide deposit button
+    if (depositBtn) {
+      depositBtn.style.display = 'none';
+    }
+    // Hide wallet info
+    if (walletInfoEl) {
+      walletInfoEl.style.display = 'none';
+      walletInfoEl.classList.remove('active');
+    }
+  }
+  updateBalanceDisplay();
 }
 
 // ─── Session ID ───────────────────────────────────────────────────────────────
@@ -258,7 +649,6 @@ const overlayEl      = document.getElementById('overlay');
 const overlayTitleEl = document.getElementById('overlayTitle');
 const overlayMsgEl   = document.getElementById('overlayMsg');
 const btnNew         = document.getElementById('btnNew');
-const btnSubmit      = document.getElementById('btnSubmit');
 const btnNewOverlay  = document.getElementById('btnNewOverlay');
 
 // ─── Board Rendering ──────────────────────────────────────────────────────────
@@ -321,16 +711,20 @@ function applyState(state) {
   scoreEl.textContent = state.score;
   bestEl.textContent  = state.best;
 
-  // Enable Submit whenever there are points and the game is over
-  btnSubmit.disabled = state.score === 0 || scoreSubmitted;
+  // Auto-submit on game over if not already submitted
+  if (state.gameOver && !scoreSubmitted && state.score > 0) {
+    autoSubmitScore(state.score, state.board).catch(err => 
+      console.error('Auto-submit on game over failed:', err)
+    );
+  }
 
   // Show overlay on game-over or win
   if (state.gameOver || (state.won && !overlayEl.classList.contains('active'))) {
     if (!overlayEl.classList.contains('active')) {
       overlayTitleEl.textContent = state.won ? '🎉 You Win!' : 'Game Over';
       overlayMsgEl.textContent   = state.won
-        ? 'You reached 2048! Keep going or submit your score.'
-        : `Final score: ${state.score}. Submit it to the chain!`;
+        ? `You reached 2048! Score: ${state.score}. ${scoreSubmitted ? 'Score submitted!' : 'Score will auto-submit.'}`
+        : `Final score: ${state.score}. ${scoreSubmitted ? 'Score submitted!' : 'Score will auto-submit.'}`;
       overlayEl.classList.add('active');
     }
   } else {
@@ -373,10 +767,6 @@ async function pollSphereStatus() {
   try {
     const status = await fetchSphereStatus();
     renderSphereStatus(status);
-
-    // Update Submit button if sphere just connected
-    if (!status.connected) btnSubmit.disabled = true;
-
     setTimeout(pollSphereStatus, status.connected ? 30_000 : 5_000);
   } catch {
     setTimeout(pollSphereStatus, 10_000);
@@ -387,33 +777,35 @@ async function pollSphereStatus() {
 
 /** Starts a fresh game. */
 async function newGame() {
-  // If wallet not connected, try to connect (or skip if in demo mode)
+  // MANDATORY: Wallet must be connected before game can start
   if (!isConnected) {
+    showMessage('⚠️  Wallet connection required. Connecting…', 'warn');
     const tryConnect = await connectWallet();
     if (!tryConnect) {
-      // Allow demo mode without wallet for testing
-      const proceed = confirm('Wallet connection failed. Play in demo mode? (No wallet charges)');
-      if (!proceed) return;
+      showMessage('❌ Wallet connection is required to play. Please connect your wallet first.', 'err');
+      return;
     }
   }
 
-  // Check balance and prompt for deposit if needed (only if connected)
-  if (isConnected) {
-    await checkBalance();
-    if (utcBalance < DEPOSIT_AMOUNT) {
-      showMessage(`Need ${DEPOSIT_AMOUNT} UTC to play. Requesting deposit…`, 'warn');
-      const deposited = await depositToPlay();
-      if (!deposited) return;
+  // MANDATORY: Require in-game deposit before game can start
+  if (gameDepositBalance < DEPOSIT_AMOUNT) {
+    showMessage(`⚠️  Deposit required: Need ${DEPOSIT_AMOUNT} UTC to play. Requesting deposit…`, 'warn');
+    const deposited = await depositToPlay();
+    if (!deposited) {
+      showMessage(`❌ Deposit of ${DEPOSIT_AMOUNT} UTC is required to start the game.`, 'err');
+      return;
     }
   }
 
+  // Reset move count for new game
+  moveCount = 0;
   scoreSubmitted = false;
   overlayEl.classList.remove('active');
   showMessage('Starting new game…');
   try {
     const state = await fetchNew();
     applyState(state);
-    showMessage('Use arrow keys or buttons to move tiles.');
+    showMessage(`Use arrow keys or buttons to move tiles. In-game balance: ${gameDepositBalance} UTC`);
   } catch (err) {
     showMessage(`Error: ${err.message}`, 'err');
   }
@@ -421,10 +813,16 @@ async function newGame() {
 
 /** Applies a directional move, then updates the board. */
 async function doMove(direction) {
-  // Charge for the move only if wallet is connected
-  if (isConnected) {
-    const charged = await chargeMoveToWallet();
-    if (!charged) return;
+  // MANDATORY: Wallet must be connected to make moves
+  if (!isConnected) {
+    showMessage('❌ Wallet not connected. Please connect your wallet first.', 'err');
+    return;
+  }
+
+  // Charge for the move from in-game deposit
+  const charged = await chargeMoveToWallet();
+  if (!charged) {
+    return; // Error message already shown in chargeMoveToWallet
   }
 
   try {
@@ -432,43 +830,57 @@ async function doMove(direction) {
     applyState(state);
     if (!state.moved) {
       showMessage('No tiles moved — try another direction.', 'warn');
+      // Refund the move cost if no tiles moved
+      gameDepositBalance += MOVE_COST_UTC;
+      moveCount--;
+      updateBalanceDisplay();
     } else {
+      const balanceMsg = `Balance: ${gameDepositBalance} UTC`;
       showMessage(
         state.gameOver
-          ? `Game over! Final score: ${state.score}`
+          ? `Game over! Final score: ${state.score}. ${balanceMsg}`
           : state.won
-            ? `🎉 You reached 2048! Score: ${state.score}`
-            : `Score: ${state.score}`,
+            ? `🎉 You reached 2048! Score: ${state.score}. ${balanceMsg}`
+            : `Score: ${state.score}. ${balanceMsg}`,
         state.gameOver ? 'err' : state.won ? 'ok' : ''
       );
+
+      // Auto-submit after X moves
+      if (moveCount >= AUTO_SUBMIT_MOVE_COUNT && !scoreSubmitted) {
+        await autoSubmitScore(state.score, state.board);
+      }
     }
   } catch (err) {
     showMessage(`Move error: ${err.message}`, 'err');
+    // Refund on error
+    gameDepositBalance += MOVE_COST_UTC;
+    moveCount--;
+    updateBalanceDisplay();
   }
 }
 
-/** Submits the current score to the Unicity blockchain. */
-async function submitToChain() {
-  btnSubmit.disabled = true;
-  showMessage('Submitting score to the Unicity chain… ⛓', 'warn');
-
+/** Automatically submits score to blockchain after X moves */
+async function autoSubmitScore(score, board) {
+  if (scoreSubmitted || score === 0) return;
+  
+  showMessage(`Auto-submitting score after ${moveCount} moves… ⛓`, 'warn');
   try {
     const result = await fetchSubmit();
-
     if (result.success) {
       scoreSubmitted = true;
-      showMessage(
-        `✅ Score ${result.score} submitted! Sphere event ID: ${result.eventId}`,
-        'ok'
-      );
+      showMessage(`✅ Score ${score} auto-submitted! Event ID: ${result.eventId}`, 'ok');
     } else {
-      showMessage(`❌ Submission failed: ${result.error}`, 'err');
-      btnSubmit.disabled = false; // allow retry
+      showMessage(`⚠️  Auto-submit failed: ${result.error}. Will retry later.`, 'warn');
     }
   } catch (err) {
-    showMessage(`❌ Network error: ${err.message}`, 'err');
-    btnSubmit.disabled = false;
+    showMessage(`⚠️  Auto-submit error: ${err.message}. Will retry later.`, 'warn');
   }
+}
+
+/** Submits the current score to the Unicity blockchain (used by auto-submit). */
+async function submitToChain() {
+  // This function is kept for compatibility but auto-submit is used instead
+  // Manual submission removed - scores auto-submit after X moves or on game over
 }
 
 // ─── Event Listeners ──────────────────────────────────────────────────────────
@@ -481,6 +893,11 @@ document.addEventListener('keydown', e => {
   };
   if (map[e.key]) {
     e.preventDefault(); // stop page scroll
+    // Only allow moves if wallet is connected and deposit is made
+    if (!isConnected) {
+      showMessage('❌ Please connect your wallet first!', 'err');
+      return;
+    }
     doMove(map[e.key]);
   }
 });
@@ -488,7 +905,14 @@ document.addEventListener('keydown', e => {
 /** Mobile arrow pad buttons */
 document.querySelector('.arrow-pad').addEventListener('click', e => {
   const btn = e.target.closest('[data-dir]');
-  if (btn) doMove(btn.dataset.dir);
+  if (btn) {
+    // Only allow moves if wallet is connected and deposit is made
+    if (!isConnected) {
+      showMessage('❌ Please connect your wallet first!', 'err');
+      return;
+    }
+    doMove(btn.dataset.dir);
+  }
 });
 
 /** Wallet connection button */
@@ -498,18 +922,31 @@ document.getElementById('btnConnectWallet').addEventListener('click', async () =
     return;
   }
   await connectWallet();
-  const walletInfoEl = document.getElementById('walletInfo');
-  if (isConnected) {
-    walletInfoEl.classList.add('active');
-  }
+  updateWalletUI(); // Update UI after connection attempt
 });
+
+/** Deposit button */
+const btnDeposit = document.getElementById('btnDeposit');
+if (btnDeposit) {
+  btnDeposit.addEventListener('click', async () => {
+    if (!isConnected) {
+      showMessage('❌ Please connect your wallet first', 'err');
+      return;
+    }
+    btnDeposit.disabled = true;
+    btnDeposit.textContent = 'Processing...';
+    const success = await depositToPlay();
+    btnDeposit.textContent = `💰 Deposit (${DEPOSIT_AMOUNT} UTC)`;
+    btnDeposit.disabled = false;
+    updateWalletUI();
+  });
+}
 
 /** New game buttons */
 btnNew.addEventListener('click', newGame);
 btnNewOverlay.addEventListener('click', newGame);
 
-/** Submit score to chain */
-btnSubmit.addEventListener('click', submitToChain);
+// Submit button removed - auto-submit is used instead
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
@@ -520,7 +957,13 @@ btnSubmit.addEventListener('click', submitToChain);
     // Load (or create) a game on the server
     const state = await fetchState();
     applyState(state);
-    showMessage('Use arrow keys or buttons to move tiles.');
+    
+    // Show message that wallet connection is required
+    if (!isConnected) {
+      showMessage('⚠️  Please connect your wallet and deposit UTC tokens to start playing.', 'warn');
+    } else {
+      showMessage('Use arrow keys or buttons to move tiles.');
+    }
   } catch (err) {
     showMessage(`Failed to load game: ${err.message}`, 'err');
   }
