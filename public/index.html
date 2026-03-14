@@ -14,30 +14,53 @@
       color: #776e65;
       min-height: 100vh;
       display: flex;
+      justify-content: center;
+      padding: 24px 12px 40px;
+    }
+
+    .app-shell {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
       flex-direction: column;
-      align-items: center;
-      padding: 20px 12px 40px;
+      align-items: stretch;
     }
 
     /* ── Header ───────────────────────────────────────────── */
     .header {
       width: 100%;
-      max-width: 500px;
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
-      margin-bottom: 16px;
+      margin-bottom: 12px;
+      gap: 12px;
     }
-    .title { font-size: 3.5rem; font-weight: 900; color: #776e65; line-height: 1; }
+    .title {
+      font-size: 3.4rem;
+      font-weight: 900;
+      color: #776e65;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }
     .title span { color: #edc22e; }
-    .subtitle { font-size: .8rem; margin-top: 4px; color: #776e65; }
-    .scores { display: flex; gap: 8px; }
+    .subtitle {
+      font-size: .8rem;
+      margin-top: 6px;
+      color: #776e65;
+    }
+    .scores {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: flex-end;
+    }
     .score-box {
       background: #bbada0;
-      border-radius: 6px;
-      padding: 6px 14px;
+      border-radius: 10px;
+      padding: 8px 18px;
       text-align: center;
-      min-width: 72px;
+      min-width: 86px;
+      box-shadow: 0 6px 0 #a09386;
     }
     .score-box .label {
       display: block;
@@ -57,16 +80,16 @@
     /* ── Controls ─────────────────────────────────────────── */
     .controls {
       width: 100%;
-      max-width: 500px;
       display: flex;
       gap: 10px;
-      margin-bottom: 16px;
+      margin-bottom: 18px;
       flex-wrap: wrap;
+      justify-content: flex-end;
     }
     .btn {
       padding: 10px 20px;
       border: none;
-      border-radius: 6px;
+      border-radius: 999px;
       font-size: 0.9rem;
       font-weight: 700;
       cursor: pointer;
@@ -84,8 +107,8 @@
       border-radius: 8px;
       padding: 10px;
       width: 100%;
-      max-width: 500px;
       aspect-ratio: 1;
+      box-shadow: 0 18px 30px rgba(0,0,0,.18);
     }
     .board {
       display: grid;
@@ -120,15 +143,14 @@
 
     /* ── Message ──────────────────────────────────────────── */
     .message {
-      margin-top: 14px;
+      margin-top: 16px;
       width: 100%;
-      max-width: 500px;
       min-height: 44px;
       font-size: 0.9rem;
       font-weight: 600;
       color: #776e65;
       background: #eee4da;
-      border-radius: 6px;
+      border-radius: 8px;
       padding: 10px 16px;
       display: flex;
       align-items: center;
@@ -146,13 +168,12 @@
 
     /* ── Sphere status pill ───────────────────────────────── */
     .sphere-pill {
-      margin-top: 14px;
+      margin-top: 10px;
       width: 100%;
-      max-width: 500px;
-      font-size: 0.78rem;
+      font-size: 0.8rem;
       background: #f3f0e9;
-      border-radius: 6px;
-      padding: 10px 14px;
+      border-radius: 8px;
+      padding: 9px 14px;
       color: #888;
       line-height: 1.6;
     }
@@ -211,6 +232,22 @@
     /* ── Hint text ────────────────────────────────────────── */
     .hint { margin-top: 10px; font-size: .78rem; color: #bbb; text-align: center; }
 
+    /* ── Responsive tweaks ───────────────────────────────────── */
+    @media (max-width: 480px) {
+      .header {
+        align-items: center;
+      }
+      .title {
+        font-size: 3rem;
+      }
+      .controls {
+        justify-content: space-between;
+      }
+      .board-wrap {
+        box-shadow: 0 12px 22px rgba(0,0,0,.16);
+      }
+    }
+
     /* ── Wallet Info ───────────────────────────────────────── */
     #walletInfo { display: none; }
     #walletInfo.active { display: block; }
@@ -219,75 +256,77 @@
 <body>
 
   <!-- ── Header: Title + Score Boxes ──────────────────────────────────────── -->
-  <div class="header">
-    <div>
-      <h1 class="title">20<span>48</span></h1>
-      <p class="subtitle">× Sphere Chain</p>
-    </div>
-    <div class="scores">
-      <div class="score-box">
-        <span class="label">SCORE</span>
-        <span class="value" id="score">0</span>
-      </div>
-      <div class="score-box">
-        <span class="label">BEST</span>
-        <span class="value" id="best">0</span>
-      </div>
-    </div>
-  </div>
-
-  <!-- ── Action Buttons ────────────────────────────────────────────────────── -->
-  <div class="controls">
-    <button class="btn btn-new"    id="btnConnectWallet">🔗 Connect Wallet</button>
-    <button class="btn btn-new"    id="btnDeposit" style="display: none;">💰 Deposit (100 UTC)</button>
-    <button class="btn btn-new"    id="btnNew">New Game</button>
-  </div>
-
-  <!-- ── Wallet Balance Display ────────────────────────────────────────────── -->
-  <div class="sphere-pill" id="walletInfo" style="display: none;">
-    <div style="display: flex; justify-content: space-between; align-items: center;">
+  <div class="app-shell">
+    <div class="header">
       <div>
-        <strong>💰 Wallet Balance:</strong> <span id="walletBalance">0.00 UTC</span>
+        <h1 class="title">20<span>48</span></h1>
+        <p class="subtitle">× Sphere Chain</p>
       </div>
-      <div>
-        <strong>🎮 In-Game Balance:</strong> <span id="gameDeposit">0 UTC</span>
+      <div class="scores">
+        <div class="score-box">
+          <span class="label">SCORE</span>
+          <span class="value" id="score">0</span>
+        </div>
+        <div class="score-box">
+          <span class="label">BEST</span>
+          <span class="value" id="best">0</span>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- ── 4×4 Game Board ────────────────────────────────────────────────────── -->
-  <div class="board-wrap">
-    <div class="board" id="board">
-      <!-- 16 cells rendered by ui.js -->
+    <!-- ── Action Buttons ─────────────────────────────────────────────────── -->
+    <div class="controls">
+      <button class="btn btn-new"    id="btnConnectWallet">🔗 Connect Wallet</button>
+      <button class="btn btn-new"    id="btnDeposit" style="display: none;">💰 Deposit (100 UTC)</button>
+      <button class="btn btn-new"    id="btnNew">New Game</button>
     </div>
-  </div>
 
-  <!-- ── Mobile Arrow Pad ──────────────────────────────────────────────────── -->
-  <div class="arrow-pad">
-    <button class="up"    data-dir="up">↑</button>
-    <button class="left"  data-dir="left">←</button>
-    <button class="down"  data-dir="down">↓</button>
-    <button class="right" data-dir="right">→</button>
-  </div>
-  <p class="hint">Use arrow keys or buttons to move tiles.</p>
+    <!-- ── Wallet Balance Display ─────────────────────────────────────────── -->
+    <div class="sphere-pill" id="walletInfo" style="display: none;">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+          <strong>💰 Wallet Balance:</strong> <span id="walletBalance">0.00 UTC</span>
+        </div>
+        <div>
+          <strong>🎮 In-Game Balance:</strong> <span id="gameDeposit">0 UTC</span>
+        </div>
+      </div>
+    </div>
 
-  <!-- ── Status Message ────────────────────────────────────────────────────── -->
-  <div class="message" id="message">
-    <div class="dot"></div>
-    <span id="messageText">Loading game…</span>
-  </div>
+    <!-- ── 4×4 Game Board ─────────────────────────────────────────────────── -->
+    <div class="board-wrap">
+      <div class="board" id="board">
+        <!-- 16 cells rendered by ui.js -->
+      </div>
+    </div>
 
-  <!-- ── Sphere Status Pill ────────────────────────────────────────────────── -->
-  <div class="sphere-pill" id="spherePill">
-    <strong>⛓ Sphere:</strong> Connecting to Unicity blockchain…
-  </div>
+    <!-- ── Mobile Arrow Pad ───────────────────────────────────────────────── -->
+    <div class="arrow-pad">
+      <button class="up"    data-dir="up">↑</button>
+      <button class="left"  data-dir="left">←</button>
+      <button class="down"  data-dir="down">↓</button>
+      <button class="right" data-dir="right">→</button>
+    </div>
+    <p class="hint">Use arrow keys or buttons to move tiles.</p>
 
-  <!-- ── Game-Over / Win Overlay ───────────────────────────────────────────── -->
-  <div class="overlay" id="overlay">
-    <div class="overlay-box">
-      <h2 id="overlayTitle">Game Over</h2>
-      <p  id="overlayMsg">No moves left!</p>
-      <button class="btn btn-new" id="btnNewOverlay">Play Again</button>
+    <!-- ── Status Message ─────────────────────────────────────────────────── -->
+    <div class="message" id="message">
+      <div class="dot"></div>
+      <span id="messageText">Loading game…</span>
+    </div>
+
+    <!-- ── Sphere Status Pill ─────────────────────────────────────────────── -->
+    <div class="sphere-pill" id="spherePill">
+      <strong>⛓ Sphere:</strong> Connecting to Unicity blockchain…
+    </div>
+
+    <!-- ── Game-Over / Win Overlay ────────────────────────────────────────── -->
+    <div class="overlay" id="overlay">
+      <div class="overlay-box">
+        <h2 id="overlayTitle">Game Over</h2>
+        <p  id="overlayMsg">No moves left!</p>
+        <button class="btn btn-new" id="btnNewOverlay">Play Again</button>
+      </div>
     </div>
   </div>
 
