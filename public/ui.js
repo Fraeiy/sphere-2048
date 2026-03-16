@@ -777,26 +777,6 @@ async function pollSphereStatus() {
 
 /** Starts a fresh game. */
 async function newGame() {
-  // MANDATORY: Wallet must be connected before game can start
-  if (!isConnected) {
-    showMessage('⚠️  Wallet connection required. Connecting…', 'warn');
-    const tryConnect = await connectWallet();
-    if (!tryConnect) {
-      showMessage('❌ Wallet connection is required to play. Please connect your wallet first.', 'err');
-      return;
-    }
-  }
-
-  // MANDATORY: Require in-game deposit before game can start
-  if (gameDepositBalance < DEPOSIT_AMOUNT) {
-    showMessage(`⚠️  Deposit required: Need ${DEPOSIT_AMOUNT} UTC to play. Requesting deposit…`, 'warn');
-    const deposited = await depositToPlay();
-    if (!deposited) {
-      showMessage(`❌ Deposit of ${DEPOSIT_AMOUNT} UTC is required to start the game.`, 'err');
-      return;
-    }
-  }
-
   // Reset move count for new game
   moveCount = 0;
   scoreSubmitted = false;
@@ -805,7 +785,10 @@ async function newGame() {
   try {
     const state = await fetchNew();
     applyState(state);
-    showMessage(`Use arrow keys or buttons to move tiles. In-game balance: ${gameDepositBalance} UTC`);
+    const walletHint = isConnected
+      ? `In-game balance: ${gameDepositBalance} UTC`
+      : 'Connect wallet to submit scores on-chain.';
+    showMessage(`Use arrow keys or buttons to move tiles. ${walletHint}`);
   } catch (err) {
     showMessage(`Error: ${err.message}`, 'err');
   }
@@ -813,16 +796,14 @@ async function newGame() {
 
 /** Applies a directional move, then updates the board. */
 async function doMove(direction) {
-  // MANDATORY: Wallet must be connected to make moves
-  if (!isConnected) {
-    showMessage('❌ Wallet not connected. Please connect your wallet first.', 'err');
-    return;
-  }
-
-  // Charge for the move from in-game deposit
-  const charged = await chargeMoveToWallet();
-  if (!charged) {
-    return; // Error message already shown in chargeMoveToWallet
+  // If wallet is connected and has deposit, charge for the move
+  let moveWasCharged = false;
+  if (isConnected && gameDepositBalance > 0) {
+    const charged = await chargeMoveToWallet();
+    if (!charged) {
+      return; // Error message already shown in chargeMoveToWallet
+    }
+    moveWasCharged = true;
   }
 
   try {
@@ -830,18 +811,21 @@ async function doMove(direction) {
     applyState(state);
     if (!state.moved) {
       showMessage('No tiles moved — try another direction.', 'warn');
-      // Refund the move cost if no tiles moved
-      gameDepositBalance += MOVE_COST_UTC;
-      moveCount--;
-      updateBalanceDisplay();
+      // Refund the move cost only if it was actually charged
+      if (moveWasCharged) {
+        gameDepositBalance += MOVE_COST_UTC;
+        moveCount--;
+        updateBalanceDisplay();
+      }
     } else {
-      const balanceMsg = `Balance: ${gameDepositBalance} UTC`;
+      moveCount++;
+      const balanceMsg = isConnected && gameDepositBalance > 0 ? ` Balance: ${gameDepositBalance} UTC` : '';
       showMessage(
         state.gameOver
-          ? `Game over! Final score: ${state.score}. ${balanceMsg}`
+          ? `Game over! Final score: ${state.score}.${balanceMsg}`
           : state.won
-            ? `🎉 You reached 2048! Score: ${state.score}. ${balanceMsg}`
-            : `Score: ${state.score}. ${balanceMsg}`,
+            ? `🎉 You reached 2048! Score: ${state.score}.${balanceMsg}`
+            : `Score: ${state.score}.${balanceMsg}`,
         state.gameOver ? 'err' : state.won ? 'ok' : ''
       );
 
@@ -852,10 +836,12 @@ async function doMove(direction) {
     }
   } catch (err) {
     showMessage(`Move error: ${err.message}`, 'err');
-    // Refund on error
-    gameDepositBalance += MOVE_COST_UTC;
-    moveCount--;
-    updateBalanceDisplay();
+    // Refund on error only if the move was actually charged
+    if (moveWasCharged) {
+      gameDepositBalance += MOVE_COST_UTC;
+      moveCount--;
+      updateBalanceDisplay();
+    }
   }
 }
 
@@ -893,11 +879,6 @@ document.addEventListener('keydown', e => {
   };
   if (map[e.key]) {
     e.preventDefault(); // stop page scroll
-    // Only allow moves if wallet is connected and deposit is made
-    if (!isConnected) {
-      showMessage('❌ Please connect your wallet first!', 'err');
-      return;
-    }
     doMove(map[e.key]);
   }
 });
@@ -906,11 +887,6 @@ document.addEventListener('keydown', e => {
 document.querySelector('.arrow-pad').addEventListener('click', e => {
   const btn = e.target.closest('[data-dir]');
   if (btn) {
-    // Only allow moves if wallet is connected and deposit is made
-    if (!isConnected) {
-      showMessage('❌ Please connect your wallet first!', 'err');
-      return;
-    }
     doMove(btn.dataset.dir);
   }
 });
@@ -958,9 +934,9 @@ btnNewOverlay.addEventListener('click', newGame);
     const state = await fetchState();
     applyState(state);
     
-    // Show message that wallet connection is required
+    // Show message based on wallet connection status
     if (!isConnected) {
-      showMessage('⚠️  Please connect your wallet and deposit UTC tokens to start playing.', 'warn');
+      showMessage('Use arrow keys or buttons to move tiles. Connect wallet to submit scores on-chain.');
     } else {
       showMessage('Use arrow keys or buttons to move tiles.');
     }
