@@ -1,5 +1,5 @@
 {
-  "framework": "nodejs",
+  "framework": "node",
   "buildCommand": "npm ci --only=production",
   "installCommand": "npm ci",
   "outputDirectory": ".",
