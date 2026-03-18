@@ -14,6 +14,9 @@
  *   SPHERE_NETWORK          "testnet" | "mainnet" | "dev"  (default: testnet)
  */
 
+import { Sphere } from '@unicitylabs/sphere-sdk';
+import { createNodeProviders } from '@unicitylabs/sphere-sdk/impl/nodejs';
+
 // ─── Module State ─────────────────────────────────────────────────────────────
 
 /** Game treasury wallet info */
@@ -29,6 +32,34 @@ const processedTransactions = new Set();
 /** Simulate transaction history (in production, query blockchain) */
 let transactionHistory = [];
 
+/** Sphere SDK wallet instance used for real on-chain submissions */
+let sphereClient = null;
+
+/** Chain runtime state */
+let chainStatus = {
+  connected: false,
+  network: null,
+  l1Address: null,
+  dataDir: null,
+  lastError: null,
+};
+
+const CHAIN_RETRY_ATTEMPTS = 3;
+const CHAIN_RETRY_BASE_DELAY_MS = 750;
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function toBatchMemo(userId, moveCount, moveHash) {
+  const compact = JSON.stringify({
+    u: String(userId).slice(0, 24),
+    n: moveCount,
+    h: String(moveHash).slice(0, 40),
+  });
+  return compact.length <= 120 ? compact : compact.slice(0, 120);
+}
+
 // ─── Initialisation ───────────────────────────────────────────────────────────
 
 /**
@@ -43,6 +74,7 @@ export async function connectSphere() {
   const network  = process.env.SPHERE_NETWORK || 'testnet';
   const address  = process.env.GAME_TREASURY_ADDRESS;
   const nametag  = process.env.GAME_TREASURY_NAMETAG;
+  const dataDir  = process.env.SPHERE_DATA_DIR || './sphere-data';
 
   console.log(`[Game Treasury] Setting up deposit wallet for ${network}…`);
 
@@ -57,6 +89,36 @@ export async function connectSphere() {
     address,
     nametag,
   };
+
+  chainStatus.network = network;
+  chainStatus.dataDir = dataDir;
+
+  try {
+    const providers = createNodeProviders({ network, dataDir });
+    const initOptions = {
+      ...providers,
+      autoGenerate: true,
+    };
+
+    if (process.env.GAME_TREASURY_MNEMONIC) {
+      initOptions.mnemonic = process.env.GAME_TREASURY_MNEMONIC;
+      delete initOptions.autoGenerate;
+    }
+
+    const { sphere } = await Sphere.init(initOptions);
+    sphereClient = sphere;
+
+    chainStatus.connected = true;
+    chainStatus.l1Address = sphere.identity?.l1Address || null;
+    chainStatus.lastError = null;
+
+    console.log('[Chain] ✅ Sphere SDK initialized for real transaction submission');
+    console.log(`[Chain]    L1 Address: ${chainStatus.l1Address || 'unknown'}`);
+  } catch (err) {
+    chainStatus.connected = false;
+    chainStatus.lastError = err?.message || String(err);
+    console.error('[Chain] ❌ Failed to initialize Sphere SDK for on-chain submissions:', chainStatus.lastError);
+  }
 
   console.log(`[Game Treasury] ✅ Treasury configured`);
   console.log(`[Game Treasury]    Nametag: ${treasuryInfo.nametag}`);
@@ -104,26 +166,70 @@ export async function submitScore(score, board) {
   return { success: true, eventId: 'local' };
 }
 
+async function submitMoveBatchOnce(payload) {
+  if (!sphereClient || !chainStatus.connected) {
+    throw new Error('Sphere SDK is not connected for chain submissions');
+  }
+
+  const l1 = sphereClient.payments?.l1;
+  if (!l1) {
+    throw new Error('L1 payments module is unavailable in current Sphere configuration');
+  }
+
+  const recipient = treasuryInfo.address || chainStatus.l1Address;
+  if (!recipient) {
+    throw new Error('No treasury L1 address available for batch transaction');
+  }
+
+  const memo = toBatchMemo(payload.userId, payload.moves.length, payload.moveHash);
+  const sendResult = await l1.send({
+    to: recipient,
+    amount: '1',
+    memo,
+  });
+
+  if (!sendResult.success || !sendResult.txHash) {
+    throw new Error(sendResult.error || 'L1 send failed without txHash');
+  }
+
+  return sendResult.txHash;
+}
+
 /**
- * Submits a batch state update after 5 user moves.
- * In production this should publish to chain/relay with proper signing.
+ * Submits a batch state update after 5 user moves as a real on-chain transaction.
  *
  * @param {{
  *   userId: string,
- *   moves: Array<{ direction: string, moved: boolean, score: number, ts: number }>,
+ *   moves: Array<{ direction: string, moved: boolean, score: number, moveNo: number }>,
  *   moveHash: string,
  *   finalState: { score: number, board: number[][], gameOver: boolean, won: boolean }
  * }} payload
- * @returns {Promise<{ success: boolean, txId?: string, moveHash?: string, error?: string }>}
+ * @returns {Promise<{ success: boolean, txHash?: string, moveHash?: string, error?: string }>}
  */
 export async function submitMoveBatch(payload) {
-  const txId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-  console.log(
-    `[Chain] Batched move update submitted: user=${payload.userId}, moves=${payload.moves.length}, hash=${payload.moveHash}, txId=${txId}`
-  );
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= CHAIN_RETRY_ATTEMPTS; attempt++) {
+    try {
+      const txHash = await submitMoveBatchOnce(payload);
+      console.log(`[Chain] Real transaction submitted: user=${payload.userId}, txHash=${txHash}`);
+      return {
+        success: true,
+        txHash,
+        moveHash: payload.moveHash,
+      };
+    } catch (err) {
+      lastError = err?.message || String(err);
+      console.warn(`[Chain] Batch submission attempt ${attempt}/${CHAIN_RETRY_ATTEMPTS} failed for ${payload.userId}: ${lastError}`);
+      if (attempt < CHAIN_RETRY_ATTEMPTS) {
+        await sleep(CHAIN_RETRY_BASE_DELAY_MS * attempt);
+      }
+    }
+  }
+
   return {
-    success: true,
-    txId,
+    success: false,
+    error: lastError || 'Unknown chain submission error',
     moveHash: payload.moveHash,
   };
 }
@@ -146,6 +252,7 @@ export function getSphereStatus() {
   return {
     connected: treasuryInfo.address ? true : false,
     treasury:  treasuryInfo,
+    chain: chainStatus,
   };
 }
 

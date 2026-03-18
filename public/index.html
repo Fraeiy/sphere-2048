@@ -97,6 +97,7 @@
     }
     .btn:active { transform: scale(.96); }
     .btn-new     { background: #8f7a66; color: #fff; }
+    .btn-secondary { background: #9b8f83; color: #fff; }
     .btn-submit  { background: #edc22e; color: #fff; flex: 1; }
     .btn-submit:disabled { opacity: .45; cursor: not-allowed; }
     .btn:hover:not(:disabled) { opacity: .88; }
@@ -199,6 +200,109 @@
     .overlay-box h2 { font-size: 2rem; color: #776e65; margin-bottom: 8px; }
     .overlay-box p  { color: #999; margin-bottom: 24px; font-size: 1rem; }
 
+    /* ── Leaderboard Modal ────────────────────────────────── */
+    .leaderboard-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(48, 42, 36, 0.42);
+      align-items: center;
+      justify-content: center;
+      z-index: 20;
+      padding: 16px;
+    }
+    .leaderboard-overlay.active { display: flex; }
+    .leaderboard-modal {
+      width: min(560px, 100%);
+      max-height: min(78vh, 720px);
+      background: #fffaf3;
+      border-radius: 14px;
+      box-shadow: 0 22px 44px rgba(0, 0, 0, 0.24);
+      border: 1px solid #e6dccf;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .leaderboard-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #e6dccf;
+      background: linear-gradient(180deg, #f8efe4 0%, #fffaf3 100%);
+    }
+    .leaderboard-title {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: #6f6256;
+      letter-spacing: 0.01em;
+    }
+    .leaderboard-close {
+      border: none;
+      border-radius: 999px;
+      width: 34px;
+      height: 34px;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #7a6d61;
+      background: #efe4d5;
+      cursor: pointer;
+    }
+    .leaderboard-close:hover { background: #e6d8c5; }
+    .leaderboard-body {
+      padding: 12px 14px 14px;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .leaderboard-row {
+      display: grid;
+      grid-template-columns: 56px 1fr 96px 84px;
+      align-items: center;
+      gap: 8px;
+      background: #fff;
+      border: 1px solid #eee2d3;
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-size: 0.88rem;
+      color: #6d6258;
+    }
+    .leaderboard-row.header {
+      background: #f7eddc;
+      font-weight: 800;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .leaderboard-rank {
+      font-weight: 900;
+      color: #7b6d62;
+    }
+    .leaderboard-player {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+    }
+    .leaderboard-score {
+      text-align: right;
+      font-weight: 900;
+      color: #8a6d1f;
+    }
+    .leaderboard-moves {
+      text-align: right;
+      font-weight: 700;
+    }
+    .leaderboard-empty {
+      text-align: center;
+      color: #8f8377;
+      padding: 20px 12px;
+      font-size: 0.92rem;
+    }
+
     /* ── Mobile arrow pad ─────────────────────────────────── */
     .arrow-pad {
       display: grid;
@@ -279,6 +383,7 @@
       <button class="btn btn-new"    id="btnConnectWallet">🔗 Connect Wallet</button>
       <button class="btn btn-new"    id="btnDeposit" style="display: none;">💰 Deposit</button>
       <button class="btn btn-new"    id="btnNew">New Game</button>
+      <button class="btn btn-secondary" id="btnLeaderboard">🏆 Leaderboard</button>
     </div>
 
     <!-- ── Wallet Balance Display ─────────────────────────────────────────── -->
@@ -326,6 +431,19 @@
         <h2 id="overlayTitle">Game Over</h2>
         <p  id="overlayMsg">No moves left!</p>
         <button class="btn btn-new" id="btnNewOverlay">Play Again</button>
+      </div>
+    </div>
+
+    <!-- ── Leaderboard Popup ─────────────────────────────────────────────── -->
+    <div class="leaderboard-overlay" id="leaderboardOverlay" aria-hidden="true">
+      <div class="leaderboard-modal" role="dialog" aria-modal="true" aria-labelledby="leaderboardTitle">
+        <div class="leaderboard-head">
+          <h2 class="leaderboard-title" id="leaderboardTitle">🏆 Top Players</h2>
+          <button class="leaderboard-close" id="btnLeaderboardClose" aria-label="Close leaderboard">×</button>
+        </div>
+        <div class="leaderboard-body" id="leaderboardBody">
+          <div class="leaderboard-empty">Loading leaderboard…</div>
+        </div>
       </div>
     </div>
   </div>

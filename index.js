@@ -69,9 +69,18 @@ const sessionUserMap = new Map();
 
 /**
  * Per-user move buffer used for 5-move batching to chain.
- * userId -> Array<{ direction, moved, score, ts }>
+ * userId -> Array<{ moveNo, direction, moved, score }>
  */
 const userMoveBuffers = new Map();
+
+/**
+ * Per-user queued move batches waiting for chain submission.
+ * userId -> Array<{ payload: object, attempts: number }>
+ */
+const userBatchQueues = new Map();
+
+/** Users currently being processed by batch worker. */
+const userBatchProcessing = new Set();
 
 const MOVE_BATCH_SIZE = 5;
 
@@ -83,7 +92,67 @@ function pushMoveForBatch(userId, moveData) {
 }
 
 function hashMoveBatch(moves) {
-  return createHash('sha256').update(JSON.stringify(moves)).digest('hex');
+  const canonical = moves.map((m) => ({
+    moveNo: m.moveNo,
+    direction: m.direction,
+    moved: m.moved,
+    score: m.score,
+  }));
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
+function enqueueMoveBatch(userId, payload) {
+  const queue = userBatchQueues.get(userId) ?? [];
+  queue.push({ payload, attempts: 0 });
+  userBatchQueues.set(userId, queue);
+  processMoveBatchQueue(userId).catch((err) => {
+    console.error(`[Chain] Queue worker crashed for ${userId}:`, err);
+  });
+}
+
+async function processMoveBatchQueue(userId) {
+  if (userBatchProcessing.has(userId)) {
+    return;
+  }
+
+  userBatchProcessing.add(userId);
+
+  try {
+    while (true) {
+      const queue = userBatchQueues.get(userId);
+      if (!queue || queue.length === 0) {
+        break;
+      }
+
+      const job = queue[0];
+      const chainResult = await submitMoveBatch(job.payload);
+
+      if (chainResult.success) {
+        const session = sessions.get(userId);
+        if (session) {
+          session.lastBatchTxHash = chainResult.txHash;
+        }
+        queue.shift();
+        continue;
+      }
+
+      job.attempts += 1;
+      const retryDelayMs = Math.min(15000, 1000 * job.attempts);
+      console.warn(
+        `[Chain] Batch queued retry for ${userId} in ${retryDelayMs}ms (attempt ${job.attempts}, reason: ${chainResult.error || 'unknown'})`
+      );
+
+      setTimeout(() => {
+        processMoveBatchQueue(userId).catch((err) => {
+          console.error(`[Chain] Queue worker retry crashed for ${userId}:`, err);
+        });
+      }, retryDelayMs);
+
+      break;
+    }
+  } finally {
+    userBatchProcessing.delete(userId);
+  }
 }
 
 /**
@@ -98,7 +167,8 @@ function getSession(userId) {
     sessions.set(userId, { 
       userId, 
       gameState: state,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      lastBatchTxHash: null,
     });
   }
   const session = sessions.get(userId);
@@ -344,11 +414,13 @@ app.get('/api/state', (req, res) => {
 
   try {
     const state = getSession(userId);
+    const session = sessions.get(userId);
     const user = UserBalances.getBalance(userId);
 
     res.json({ 
       userId,
       canPlay: user ? UserBalances.canMove(userId) : false,
+      lastBatchTxHash: session?.lastBatchTxHash || null,
       balance: user ? {
         current: UserBalances.formatBalance(user.balance),
         movesLeft: user.movesLeft
@@ -388,10 +460,12 @@ app.post('/api/new', (req, res) => {
     const best = userBestScores.get(userId) ?? 0;
     const state = new GameState(best);
     
+    const existing = sessions.get(userId);
     sessions.set(userId, { 
       userId, 
       gameState: state,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      lastBatchTxHash: existing?.lastBatchTxHash || null,
     });
 
     const user = UserBalances.getBalance(userId);
@@ -468,18 +542,20 @@ app.post('/api/move', async (req, res) => {
     // Apply move to game
     const state = getSession(userId);
     const moved = state.move(direction);
+    const userAfterMoveCharge = UserBalances.getBalance(userId);
 
     // Update high score if needed
     if (state.score > (userBestScores.get(userId) ?? 0)) {
       userBestScores.set(userId, state.score);
     }
+    UserBalances.updateHighScore(userId, state.score);
 
     // Track this move for 5-move on-chain batching.
     const moveBuffer = pushMoveForBatch(userId, {
+      moveNo: userAfterMoveCharge?.totalMoves ?? Date.now(),
       direction,
       moved,
       score: state.score,
-      ts: Date.now(),
     });
 
     let batchTx = null;
@@ -487,7 +563,7 @@ app.post('/api/move', async (req, res) => {
       const batchMoves = moveBuffer.slice(0, MOVE_BATCH_SIZE);
       const moveHash = hashMoveBatch(batchMoves);
 
-      const chainResult = await submitMoveBatch({
+      const payload = {
         userId,
         moves: batchMoves,
         moveHash,
@@ -497,18 +573,17 @@ app.post('/api/move', async (req, res) => {
           gameOver: state.gameOver,
           won: state.won,
         },
-      });
+      };
 
-      if (chainResult.success) {
-        batchTx = {
-          txId: chainResult.txId,
-          moveHash,
-          count: batchMoves.length,
-        };
-        userMoveBuffers.set(userId, moveBuffer.slice(MOVE_BATCH_SIZE));
-      } else {
-        console.warn(`[Server] Move batch submission failed for ${userId}: ${chainResult.error || 'unknown error'}`);
-      }
+      // Queue chain submission in the background to keep move latency low.
+      userMoveBuffers.set(userId, moveBuffer.slice(MOVE_BATCH_SIZE));
+      enqueueMoveBatch(userId, payload);
+
+      batchTx = {
+        queued: true,
+        moveHash,
+        count: batchMoves.length,
+      };
     }
 
     const user = UserBalances.getBalance(userId);
@@ -668,7 +743,7 @@ app.get('/api/leaderboard', (req, res) => {
     const leaderboard = UserBalances.getLeaderboard(limit)
       .map((user, index) => ({
         rank: index + 1,
-        walletId: user.walletId,
+        walletId: user.walletId || user.userId || 'Unknown',
         highScore: user.highScore,
         totalMoves: user.totalMoves
       }));

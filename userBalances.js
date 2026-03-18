@@ -46,6 +46,11 @@ export function initializeUser(userId, walletId) {
       highScore: 0,
       createdAt: Date.now(),
     });
+  } else {
+    const user = userBalances.get(userId);
+    if (walletId && walletId !== user.walletId) {
+      user.walletId = walletId;
+    }
   }
   return userBalances.get(userId);
 }
@@ -161,7 +166,10 @@ export function updateHighScore(userId, score) {
  * @returns {object[]} Array of user records
  */
 export function getAllUsers() {
-  return Array.from(userBalances.values());
+  return Array.from(userBalances.entries()).map(([userId, value]) => ({
+    userId,
+    ...value,
+  }));
 }
 
 /**
@@ -170,7 +178,11 @@ export function getAllUsers() {
  * @returns {object[]} Array of top users sorted by high score
  */
 export function getLeaderboard(limit = 10) {
-  return Array.from(userBalances.values())
+  return Array.from(userBalances.entries())
+    .map(([userId, value]) => ({
+      userId,
+      ...value,
+    }))
     .sort((a, b) => b.highScore - a.highScore)
     .slice(0, limit);
 }

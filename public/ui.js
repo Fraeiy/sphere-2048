@@ -832,6 +832,9 @@ const fetchSubmit = () => api('/api/submit-score', { method: 'POST', body: JSON.
 /** GET /api/sphere-status — connection info */
 const fetchSphereStatus = () => api('/api/sphere-status');
 
+/** GET /api/leaderboard — top players */
+const fetchLeaderboard = (limit = 100) => api(`/api/leaderboard?limit=${limit}`);
+
 // ─── DOM References ───────────────────────────────────────────────────────────
 
 const boardEl        = document.getElementById('board');
@@ -843,8 +846,112 @@ const spherePillEl   = document.getElementById('spherePill');
 const overlayEl      = document.getElementById('overlay');
 const overlayTitleEl = document.getElementById('overlayTitle');
 const overlayMsgEl   = document.getElementById('overlayMsg');
+const leaderboardOverlayEl = document.getElementById('leaderboardOverlay');
+const leaderboardBodyEl = document.getElementById('leaderboardBody');
+const btnLeaderboard = document.getElementById('btnLeaderboard');
+const btnLeaderboardClose = document.getElementById('btnLeaderboardClose');
 const btnNew         = document.getElementById('btnNew');
 const btnNewOverlay  = document.getElementById('btnNewOverlay');
+
+/** Leaderboard cache to avoid excessive API calls while popup is toggled repeatedly. */
+const leaderboardCache = {
+  entries: null,
+  fetchedAt: 0,
+};
+const LEADERBOARD_CACHE_TTL_MS = 15_000;
+
+function shortWalletId(value) {
+  if (!value) return 'Unknown';
+  if (value.length <= 22) return value;
+  return `${value.slice(0, 10)}…${value.slice(-8)}`;
+}
+
+function renderLeaderboardRows(entries) {
+  if (!leaderboardBodyEl) return;
+
+  leaderboardBodyEl.textContent = '';
+
+  const fragment = document.createDocumentFragment();
+
+  const header = document.createElement('div');
+  header.className = 'leaderboard-row header';
+  header.innerHTML = '<div>Rank</div><div>Player</div><div style="text-align:right;">High Score</div><div style="text-align:right;">Moves</div>';
+  fragment.appendChild(header);
+
+  if (!entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'leaderboard-empty';
+    empty.textContent = 'No players on the board yet. Play a few rounds to populate it.';
+    fragment.appendChild(empty);
+    leaderboardBodyEl.appendChild(fragment);
+    return;
+  }
+
+  for (const item of entries) {
+    const row = document.createElement('div');
+    row.className = 'leaderboard-row';
+
+    const rank = document.createElement('div');
+    rank.className = 'leaderboard-rank';
+    rank.textContent = `#${item.rank}`;
+
+    const player = document.createElement('div');
+    player.className = 'leaderboard-player';
+    player.textContent = shortWalletId(item.walletId);
+    player.title = item.walletId;
+
+    const score = document.createElement('div');
+    score.className = 'leaderboard-score';
+    score.textContent = String(item.highScore ?? 0);
+
+    const moves = document.createElement('div');
+    moves.className = 'leaderboard-moves';
+    moves.textContent = String(item.totalMoves ?? 0);
+
+    row.appendChild(rank);
+    row.appendChild(player);
+    row.appendChild(score);
+    row.appendChild(moves);
+    fragment.appendChild(row);
+  }
+
+  leaderboardBodyEl.appendChild(fragment);
+}
+
+async function loadLeaderboard(forceRefresh = false) {
+  const now = Date.now();
+  const cacheValid = !forceRefresh
+    && Array.isArray(leaderboardCache.entries)
+    && (now - leaderboardCache.fetchedAt) < LEADERBOARD_CACHE_TTL_MS;
+
+  if (cacheValid) {
+    renderLeaderboardRows(leaderboardCache.entries);
+    return;
+  }
+
+  if (leaderboardBodyEl) {
+    leaderboardBodyEl.innerHTML = '<div class="leaderboard-empty">Refreshing leaderboard…</div>';
+  }
+
+  const result = await fetchLeaderboard(100);
+  const entries = Array.isArray(result?.leaderboard) ? result.leaderboard : [];
+  leaderboardCache.entries = entries;
+  leaderboardCache.fetchedAt = Date.now();
+  renderLeaderboardRows(entries);
+}
+
+async function openLeaderboard() {
+  if (!leaderboardOverlayEl) return;
+  leaderboardOverlayEl.classList.add('active');
+  leaderboardOverlayEl.setAttribute('aria-hidden', 'false');
+  await loadLeaderboard(false);
+}
+
+function closeLeaderboard() {
+  if (!leaderboardOverlayEl) return;
+  leaderboardOverlayEl.classList.remove('active');
+  leaderboardOverlayEl.setAttribute('aria-hidden', 'true');
+}
 
 // ─── Board Rendering ──────────────────────────────────────────────────────────
 
@@ -1064,9 +1171,9 @@ async function doMove(direction) {
     
     applyState(state);
 
-    if (state.moveBatch?.txId) {
+    if (state.moveBatch?.txHash) {
       showMessage(
-        `⛓ Batched ${state.moveBatch.count} moves on-chain. Tx: ${state.moveBatch.txId.slice(0, 18)}…`,
+        `⛓ Batched ${state.moveBatch.count} moves on-chain. Tx: ${state.moveBatch.txHash.slice(0, 18)}…`,
         'ok'
       );
       return;
@@ -1191,6 +1298,34 @@ if (btnDeposit) {
 /** New game buttons */
 btnNew.addEventListener('click', newGame);
 btnNewOverlay.addEventListener('click', newGame);
+
+/** Leaderboard button and popup interactions */
+if (btnLeaderboard) {
+  btnLeaderboard.addEventListener('click', () => {
+    openLeaderboard().catch((err) => {
+      console.error('[Leaderboard] Open failed:', err);
+      showMessage(`❌ Failed to load leaderboard: ${err.message}`, 'err');
+    });
+  });
+}
+
+if (btnLeaderboardClose) {
+  btnLeaderboardClose.addEventListener('click', closeLeaderboard);
+}
+
+if (leaderboardOverlayEl) {
+  leaderboardOverlayEl.addEventListener('click', (event) => {
+    if (event.target === leaderboardOverlayEl) {
+      closeLeaderboard();
+    }
+  });
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && leaderboardOverlayEl?.classList.contains('active')) {
+    closeLeaderboard();
+  }
+});
 
 // Submit button removed - auto-submit is used instead
 
