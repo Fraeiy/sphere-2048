@@ -137,14 +137,45 @@ async function registerPlayerWithGame(identity) {
     const result = await response.json();
 
     if (result.success) {
+      userId = result.userId;
       GAME_HANDLE = identity.nametag || identity.address?.slice(0, 12) || 'Player';
       DEPOSIT_ADDRESS = result.treasuryAddress;
       walletReady = true;
       console.log('[Wallet] ✅ Player registered:', GAME_HANDLE);
       console.log('[Wallet] 📮 Treasury address:', DEPOSIT_ADDRESS);
+      console.log('[Wallet] 🎮 userId:', userId);
       showMessage(`💰 Send UCT to: ${GAME_HANDLE}`, 'ok');
       updateWalletUI();
-      return true;
+      
+      // Check game balance from server
+      try {
+        console.log('[Balance] Fetching user balance...');
+        const balanceResponse = await fetch(`/api/balance?userId=${userId}`);
+        if (balanceResponse.ok) {
+          const balanceData = await balanceResponse.json();
+          console.log('[Balance] User balance:', balanceData);
+          if (balanceData.balance) {
+            const { current, movesLeft, totalDeposited } = balanceData.balance;
+            console.log(`[Balance] Current: ${current} UCT, Moves left: ${movesLeft}, Total deposited: ${totalDeposited} UCT`);
+            if (movesLeft > 0) {
+              showMessage(`💰 Welcome back! You have ${movesLeft} moves (${current} UCT)`, 'ok');
+              // Auto-start game if they have moves
+              setTimeout(() => {
+                showMessage('🎮 Starting new game…', 'ok');
+                newGame().catch(err => console.error('Failed to start game:', err));
+              }, 500);
+              return true;
+            } else {
+              // No moves - show test deposit info
+              showMessage(`💰 You need to make a deposit! Send UCT to the treasury (2048game) or use test endpoint.`, 'warn');
+              console.log('[Balance] No moves available - test deposit with: curl -X POST http://localhost:5000/api/test-deposit -H "Content-Type: application/json" -d \'{"userId":"' + userId + '","uct":100}\'');
+              return true;
+            }
+          }
+        }
+      } catch (balErr) {
+        console.error('[Balance] Failed to check game balance:', balErr);
+      }
     } else {
       throw new Error(result.error || 'Failed to register player');
     }
@@ -702,17 +733,17 @@ async function api(path, options = {}) {
 }
 
 /** GET /api/state — returns current game state */
-const fetchState = () => api('/api/state');
+const fetchState = () => api(`/api/state?userId=${userId}`);
 
 /** POST /api/new — resets the game */
-const fetchNew   = () => api('/api/new', { method: 'POST' });
+const fetchNew   = () => api('/api/new', { method: 'POST', body: JSON.stringify({ userId }) });
 
 /** POST /api/move — applies a directional move */
 const fetchMove  = dir =>
-  api('/api/move', { method: 'POST', body: JSON.stringify({ direction: dir }) });
+  api('/api/move', { method: 'POST', body: JSON.stringify({ userId, direction: dir }) });
 
 /** POST /api/submit-score — publishes score to blockchain */
-const fetchSubmit = () => api('/api/submit-score', { method: 'POST' });
+const fetchSubmit = () => api('/api/submit-score', { method: 'POST', body: JSON.stringify({ userId }) });
 
 /** GET /api/sphere-status — connection info */
 const fetchSphereStatus = () => api('/api/sphere-status');
@@ -790,6 +821,11 @@ function applyState(state) {
   renderBoard(state.board);
   scoreEl.textContent = state.score;
   bestEl.textContent  = state.best;
+  
+  // Log balance info from state
+  if (state.balance) {
+    console.log('[State] Balance info:', state.balance);
+  }
 
   // Auto-submit on game over if not already submitted
   if (state.gameOver && !scoreSubmitted && state.score > 0) {
@@ -857,6 +893,13 @@ async function pollSphereStatus() {
 
 /** Starts a fresh game. */
 async function newGame() {
+  // MANDATORY: userId must be set
+  if (!userId) {
+    showMessage('❌ Error: userId not set. Please reconnect your wallet.', 'err');
+    console.error('newGame: userId is null!');
+    return;
+  }
+
   // MANDATORY: Wallet must be connected before game can start
   if (!isConnected) {
     showMessage('⚠️  Wallet connection required. Connecting…', 'warn');
@@ -867,14 +910,20 @@ async function newGame() {
     }
   }
 
-  // MANDATORY: Require in-game deposit before game can start
-  if (gameDepositBalance < DEPOSIT_AMOUNT) {
-    showMessage(`⚠️  Deposit required: Need ${DEPOSIT_AMOUNT} UTC to play. Requesting deposit…`, 'warn');
-    const deposited = await depositToPlay();
-    if (!deposited) {
-      showMessage(`❌ Deposit of ${DEPOSIT_AMOUNT} UTC is required to start the game.`, 'err');
-      return;
+  // Check if user has moves available
+  try {
+    console.log('[Game] Checking moves before starting...');
+    const balResponse = await fetch(`/api/balance?userId=${userId}`);
+    if (balResponse.ok) {
+      const bal = await balResponse.json();
+      if (bal.balance?.movesLeft <= 0) {
+        showMessage(`❌ No moves available. Make a deposit to play!`, 'err');
+        console.log(`[Game] Test deposit: curl -X POST http://localhost:5000/api/test-deposit -H "Content-Type: application/json" -d '{"userId":"${userId}","uct":100}'`);
+        return;
+      }
     }
+  } catch (err) {
+    console.error('[Game] Failed to check moves:', err);
   }
 
   // Reset move count for new game
@@ -883,59 +932,74 @@ async function newGame() {
   overlayEl.classList.remove('active');
   showMessage('Starting new game…');
   try {
+    console.log('[Game] Calling fetchNew for userId:', userId);
     const state = await fetchNew();
+    console.log('[Game] New game state received:', state);
     applyState(state);
-    showMessage(`Use arrow keys or buttons to move tiles. In-game balance: ${gameDepositBalance} UTC`);
+    showMessage(`Use arrow keys or buttons to move tiles. Moves left: ${state.balance?.movesLeft ?? '?'}`);
   } catch (err) {
     showMessage(`Error: ${err.message}`, 'err');
+    console.error('[Game] newGame failed:', err);
   }
 }
 
 /** Applies a directional move, then updates the board. */
 async function doMove(direction) {
+  // MANDATORY: userId must be set
+  if (!userId) {
+    showMessage('❌ Error: userId not set. Please reconnect your wallet.', 'err');
+    console.error('[Move] userId is null! Cannot make move.');
+    return;
+  }
+
   // MANDATORY: Wallet must be connected to make moves
   if (!isConnected) {
     showMessage('❌ Wallet not connected. Please connect your wallet first.', 'err');
     return;
   }
 
-  // Charge for the move from in-game deposit
-  const charged = await chargeMoveToWallet();
-  if (!charged) {
-    return; // Error message already shown in chargeMoveToWallet
+  // Validate direction
+  if (!['left', 'right', 'up', 'down'].includes(direction)) {
+    console.error('[Move] Invalid direction:', direction);
+    return;
   }
 
   try {
+    console.log(`[Move] Making move: ${direction}, userId: ${userId}`);
     const state = await fetchMove(direction);
+    
+    // Server handles balance deduction
+    if (state.canPlay === false) {
+      showMessage(`❌ Insufficient balance. Need 0.1 UCT per move.`, 'err');
+      return;
+    }
+    
     applyState(state);
+    
     if (!state.moved) {
       showMessage('No tiles moved — try another direction.', 'warn');
-      // Refund the move cost if no tiles moved
-      gameDepositBalance += MOVE_COST_UTC;
-      moveCount--;
-      updateBalanceDisplay();
     } else {
-      const balanceMsg = `Balance: ${gameDepositBalance} UTC`;
+      const movesLeft = state.balance?.movesLeft ?? '?';
       showMessage(
         state.gameOver
-          ? `Game over! Final score: ${state.score}. ${balanceMsg}`
+          ? `Game over! Final score: ${state.score}. Moves left: ${movesLeft}`
           : state.won
-            ? `🎉 You reached 2048! Score: ${state.score}. ${balanceMsg}`
-            : `Score: ${state.score}. ${balanceMsg}`,
+            ? `🎉 You reached 2048! Score: ${state.score}. Moves left: ${movesLeft}`
+            : `Score: ${state.score}. Moves left: ${movesLeft}`,
         state.gameOver ? 'err' : state.won ? 'ok' : ''
       );
 
       // Auto-submit after X moves
       if (moveCount >= AUTO_SUBMIT_MOVE_COUNT && !scoreSubmitted) {
+        moveCount++;
         await autoSubmitScore(state.score, state.board);
+      } else {
+        moveCount++;
       }
     }
   } catch (err) {
+    console.error('[Move] Error:', err);
     showMessage(`Move error: ${err.message}`, 'err');
-    // Refund on error
-    gameDepositBalance += MOVE_COST_UTC;
-    moveCount--;
-    updateBalanceDisplay();
   }
 }
 

@@ -209,14 +209,18 @@ app.get('/api/balance', (req, res) => {
   }
 
   try {
+    console.log(`[Balance] Checking balance for ${userId}`);
     const user = UserBalances.getBalance(userId);
     
     if (!user) {
+      console.log(`[Balance] User ${userId} not found. Available users: ${Array.from(UserBalances.getAllUsers().map(u => u.walletId)).join(', ')}`);
       return res.status(404).json({ 
         success: false, 
         error: 'User not found' 
       });
     }
+
+    console.log(`[Balance] Found user: movesLeft=${user.movesLeft}, balance=${user.balance}`);
 
     res.json({ 
       success: true,
@@ -349,9 +353,11 @@ app.get('/api/state', (req, res) => {
  *   userId - User identifier
  */
 app.post('/api/new', (req, res) => {
-  const { userId } = req.query || req.body;
+  // Check query first, then body
+  let userId = req.query?.userId || req.body?.userId;
 
   if (!userId) {
+    console.error('[Server] /api/new missing userId. Query:', req.query, 'Body:', req.body);
     return res.status(400).json({ 
       success: false, 
       error: 'userId required' 
@@ -359,6 +365,7 @@ app.post('/api/new', (req, res) => {
   }
 
   try {
+    console.log(`[Server] Starting new game for ${userId}`);
     const best = userBestScores.get(userId) ?? 0;
     const state = new GameState(best);
     
@@ -399,6 +406,7 @@ app.post('/api/move', (req, res) => {
   const { userId, direction } = req.body;
 
   if (!userId) {
+    console.error('[Server] /api/move missing userId. Body:', req.body);
     return res.status(400).json({ 
       success: false, 
       error: 'userId required' 
@@ -415,8 +423,12 @@ app.post('/api/move', (req, res) => {
   }
 
   try {
+    console.log(`[Server] Move: ${userId} → ${direction}`);
+    
     // Check user balance FIRST (server-side validation)
     if (!UserBalances.canMove(userId)) {
+      const user = UserBalances.getBalance(userId);
+      console.log(`[Server] Insufficient balance: ${userId} has ${user?.balance ?? 0} balance, needs ${0.1 * 1e18}`);
       return res.status(402).json({ 
         success: false,
         error: 'Insufficient balance for move',
@@ -502,6 +514,87 @@ app.post('/api/submit-score', (req, res) => {
       error: err.message 
     });
   }
+});
+
+/**
+ * POST /api/test-deposit
+ * TEST ONLY: Manually add a deposit for testing
+ *
+ * Body:
+ *   { userId: string, uct: number }
+ *
+ * Response:
+ *   { success: boolean, balance: object }
+ */
+app.post('/api/test-deposit', (req, res) => {
+  const { userId, uct } = req.body;
+
+  if (!userId || !uct) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'userId and uct required' 
+    });
+  }
+
+  try {
+    console.log(`[Test Deposit] Attempting deposit for ${userId}: ${uct} UCT`);
+    
+    // Ensure user exists
+    let user = UserBalances.getBalance(userId);
+    if (!user) {
+      console.log(`[Test Deposit] User ${userId} not found, initializing...`);
+      UserBalances.initializeUser(userId, userId);
+      user = UserBalances.getBalance(userId);
+    }
+    
+    console.log(`[Test Deposit] Before deposit - balance: ${user.balance}, movesLeft: ${user.movesLeft}`);
+
+    // Add deposit in atomic units (18 decimals)
+    const amountAtomic = Math.round(uct * 1e18);
+    console.log(`[Test Deposit] Adding ${uct} UCT (${amountAtomic} atomic units)`);
+    
+    user = UserBalances.addDeposit(userId, amountAtomic);
+    
+    console.log(`[Test Deposit] After deposit - balance: ${user.balance}, movesLeft: ${user.movesLeft}`);
+
+    res.json({ 
+      success: true,
+      userId,
+      deposit: uct,
+      balance: {
+        current: UserBalances.formatBalance(user.balance),
+        totalDeposited: UserBalances.formatBalance(user.totalDeposited),
+        movesLeft: user.movesLeft
+      }
+    });
+  } catch (err) {
+    console.error('[Server] Test deposit error:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: err.message 
+    });
+  }
+});
+
+/**
+ * GET /api/debug/balances
+ * DEBUG ONLY: Returns all user balances
+ */
+app.get('/api/debug/balances', (req, res) => {
+  const allUsers = UserBalances.getAllUsers();
+  console.log('[Debug] All users:', allUsers);
+  
+  res.json({ 
+    userCount: allUsers.length,
+    users: allUsers.map(u => ({
+      walletId: u.walletId,
+      balance: UserBalances.formatBalance(u.balance),
+      totalDeposited: UserBalances.formatBalance(u.totalDeposited),
+      movesLeft: u.movesLeft,
+      totalMoves: u.totalMoves,
+      highScore: u.highScore
+    }))
+  });
 });
 
 /**

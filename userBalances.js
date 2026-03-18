@@ -109,8 +109,12 @@ export function getBalance(userId) {
  */
 export function canMove(userId) {
   const user = userBalances.get(userId);
-  if (!user) return false;
-  return user.balance >= MOVE_COST_ATOMIC;
+  const hasBalance = user && user.balance >= MOVE_COST_ATOMIC;
+  console.log(`[Balance] canMove(${userId}): user=${!!user}, balance=${user?.balance ?? 'N/A'}, needed=${MOVE_COST_ATOMIC}, can=${hasBalance}`);
+  if (!user) {
+    console.log(`[Balance] User not found in map. Keys: ${Array.from(userBalances.keys()).join(', ')}`);
+  }
+  return hasBalance;
 }
 
 /**
