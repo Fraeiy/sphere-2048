@@ -22,8 +22,9 @@ const WALLET_URL = 'https://sphere.unicity.network';
 let userId = null; // User ID for game state tracking
 let GAME_HANDLE = null; // Player's game wallet display (e.g., "fraey_2048")
 let DEPOSIT_ADDRESS = null; // Actual server wallet address to send deposits to
-const MOVE_COST_UTC = 1; // Cost per move in UTC
-const DEPOSIT_AMOUNT = 100; // Initial deposit amount in UTC
+const MOVE_COST_UTC = 0.1; // Cost per move in UCT
+const MIN_DEPOSIT_UTC = 1; // Deposit must be strictly greater than this amount
+const DEFAULT_DEPOSIT_UTC = 10;
 const COIN_ID = 'UCT';
 const UCT_COIN_ID_HEX = '455ad8720656b08e8dbd5bac1f3c73eeea5431565f6c1c3af742b1aa12d41d89';
 const UCT_DECIMALS = 18;
@@ -59,6 +60,16 @@ let isConnected = false;
 
 /** @type {boolean} - Wallet is ready for deposits after identity is published */
 let walletReady = false;
+
+/**
+ * Syncs displayed in-game balance from server-provided UCT value.
+ * @param {number|string} currentUct
+ */
+function syncGameDepositFromServer(currentUct) {
+  const parsed = Number(currentUct);
+  if (!Number.isFinite(parsed)) return;
+  gameDepositBalance = Math.max(0, Math.round(parsed * 100) / 100);
+}
 
 /**
  * Check if running in iframe (based on Boxy-Run and SDK example)
@@ -109,6 +120,38 @@ function waitForHostReady() {
 }
 
 /**
+ * Prompt the player for a deposit amount and validate it.
+ * Rules:
+ *   - Must be a finite number
+ *   - Must be strictly greater than MIN_DEPOSIT_UTC
+ * @returns {number|null} Valid amount in UCT or null when cancelled/invalid
+ */
+function promptDepositAmount() {
+  const input = window.prompt(
+    `Enter deposit amount in ${COIN_ID} (must be > ${MIN_DEPOSIT_UTC}):`,
+    String(DEFAULT_DEPOSIT_UTC)
+  );
+
+  if (input === null) {
+    return null;
+  }
+
+  const amount = Number(input.trim());
+  if (!Number.isFinite(amount)) {
+    showMessage('❌ Invalid amount. Please enter a number.', 'err');
+    return null;
+  }
+
+  if (amount <= MIN_DEPOSIT_UTC) {
+    const minimumMoves = Math.floor(MIN_DEPOSIT_UTC / MOVE_COST_UTC);
+    showMessage(`❌ Deposit must be greater than ${MIN_DEPOSIT_UTC} ${COIN_ID} (more than ${minimumMoves} moves).`, 'err');
+    return null;
+  }
+
+  return Math.round(amount * 1e8) / 1e8;
+}
+
+/**
  * Registers the player with the game server.
  * Simply stores their wallet identity for balance tracking.
  * @param {object} identity - User's wallet identity { nametag, address }
@@ -156,6 +199,8 @@ async function registerPlayerWithGame(identity) {
           console.log('[Balance] User balance:', balanceData);
           if (balanceData.balance) {
             const { current, movesLeft, totalDeposited } = balanceData.balance;
+            syncGameDepositFromServer(current);
+            updateBalanceDisplay();
             console.log(`[Balance] Current: ${current} UCT, Moves left: ${movesLeft}, Total deposited: ${totalDeposited} UCT`);
             if (movesLeft > 0) {
               showMessage(`💰 Welcome back! You have ${movesLeft} moves (${current} UCT)`, 'ok');
@@ -497,7 +542,7 @@ async function checkBalance() {
  * Uses Sphere Connect intent protocol.
  * @returns {Promise<boolean>}
  */
-async function depositToPlay() {
+async function depositToPlay(depositAmount) {
   if (!isConnected) {
     showMessage('❌ Wallet not connected', 'err');
     return false;
@@ -518,8 +563,19 @@ async function depositToPlay() {
     return false;
   }
 
-  if (utcBalance !== null && utcBalance < DEPOSIT_AMOUNT) {
-    showMessage(`❌ Insufficient wallet balance. You need at least ${DEPOSIT_AMOUNT} ${COIN_ID} in your wallet.`, 'err');
+  if (typeof depositAmount !== 'number' || !Number.isFinite(depositAmount)) {
+    showMessage('❌ Invalid deposit amount.', 'err');
+    return false;
+  }
+
+  if (depositAmount <= MIN_DEPOSIT_UTC) {
+    const minimumMoves = Math.floor(MIN_DEPOSIT_UTC / MOVE_COST_UTC);
+    showMessage(`❌ Deposit must be greater than ${MIN_DEPOSIT_UTC} ${COIN_ID} (more than ${minimumMoves} moves).`, 'err');
+    return false;
+  }
+
+  if (utcBalance !== null && utcBalance < depositAmount) {
+    showMessage(`❌ Insufficient wallet balance. You need at least ${depositAmount} ${COIN_ID} in your wallet.`, 'err');
     return false;
   }
 
@@ -553,7 +609,8 @@ async function depositToPlay() {
   }
 
   try {
-    showMessage(`Opening wallet to deposit ${DEPOSIT_AMOUNT} ${COIN_ID}… Please sign the transaction.`, 'warn');
+    const creditedMoves = Math.floor(depositAmount / MOVE_COST_UTC);
+    showMessage(`Opening wallet to deposit ${depositAmount} ${COIN_ID} (${creditedMoves} moves)… Please sign the transaction.`, 'warn');
 
     if (!uctCoinId) {
       uctCoinId = UCT_COIN_ID_HEX;
@@ -585,14 +642,41 @@ async function depositToPlay() {
                 showMessage(`❌ Deposit failed: ${msg.error.message || 'User rejected'}`, 'err');
                 resolve(false);
               } else {
-                // Add to in-game deposit balance
-                gameDepositBalance += DEPOSIT_AMOUNT;
-                moveCount = 0; // Reset move count on new deposit
-                showMessage(`✅ Deposited ${DEPOSIT_AMOUNT} ${COIN_ID}! In-game balance: ${gameDepositBalance} UTC`, 'ok');
-                sessionStorage.setItem(DEPOSIT_KEY, 'true');
-                updateBalanceDisplay();
-                checkBalance().catch(err => console.error('Balance check failed:', err));
-                resolve(true);
+                // Record deposit in backend balance tracking before enabling moves.
+                fetch('/api/verify-deposit', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'X-Session-Id': sessionId,
+                  },
+                  body: JSON.stringify({
+                    userId,
+                    senderAddress: walletIdentity?.address || userId,
+                    uct: depositAmount,
+                  }),
+                })
+                  .then(async (response) => {
+                    const data = await response.json().catch(() => ({}));
+                    if (!response.ok || !data?.success) {
+                      throw new Error(data?.error || `Server error ${response.status}`);
+                    }
+
+                    // Sync with backend-tracked balance after credit.
+                    if (data?.balance?.current !== undefined) {
+                      syncGameDepositFromServer(data.balance.current);
+                    }
+                    moveCount = 0; // Reset move count on new deposit
+                    showMessage(`✅ Deposited ${depositAmount} ${COIN_ID}! In-game balance: ${gameDepositBalance.toFixed(2)} UTC`, 'ok');
+                    sessionStorage.setItem(DEPOSIT_KEY, 'true');
+                    updateBalanceDisplay();
+                    checkBalance().catch(err => console.error('Balance check failed:', err));
+                    resolve(true);
+                  })
+                  .catch((err) => {
+                    console.error('[Deposit] Backend credit failed:', err);
+                    showMessage(`❌ Deposit recorded in wallet but failed to credit game balance: ${err.message}`, 'err');
+                    resolve(false);
+                  });
               }
             }
           }
@@ -611,7 +695,7 @@ async function depositToPlay() {
         action: 'send',
         params: {
           to: DEPOSIT_ADDRESS,
-          amount: DEPOSIT_AMOUNT,
+          amount: depositAmount,
           coinId: uctCoinId,
           memo: '2048 game deposit'
         }
@@ -656,7 +740,7 @@ function updateBalanceDisplay() {
     balanceEl.textContent = `${utcBalance !== null ? utcBalance.toFixed(2) : '0.00'} UTC`;
   }
   if (depositEl) {
-    depositEl.textContent = `${gameDepositBalance} UTC`;
+    depositEl.textContent = `${gameDepositBalance.toFixed(2)} UTC`;
   }
 }
 
@@ -676,7 +760,7 @@ function updateWalletUI() {
       depositBtn.style.display = 'block';
       depositBtn.disabled = !walletReady; // Disabled until wallet is ready
       depositBtn.textContent = walletReady 
-        ? `💰 Deposit (${DEPOSIT_AMOUNT} UTC)` 
+        ? '💰 Deposit' 
         : '⏳ Initializing wallet…';
     }
     // Show wallet info
@@ -824,6 +908,10 @@ function applyState(state) {
   
   // Log balance info from state
   if (state.balance) {
+    if (state.balance.current !== undefined) {
+      syncGameDepositFromServer(state.balance.current);
+      updateBalanceDisplay();
+    }
     console.log('[State] Balance info:', state.balance);
   }
 
@@ -1077,10 +1165,16 @@ if (btnDeposit) {
       showMessage('❌ Please connect your wallet first', 'err');
       return;
     }
+    const depositAmount = promptDepositAmount();
+    if (depositAmount === null) {
+      updateWalletUI();
+      return;
+    }
+
     btnDeposit.disabled = true;
     btnDeposit.textContent = 'Processing...';
-    const success = await depositToPlay();
-    btnDeposit.textContent = `💰 Deposit (${DEPOSIT_AMOUNT} UTC)`;
+    await depositToPlay(depositAmount);
+    btnDeposit.textContent = '💰 Deposit';
     btnDeposit.disabled = false;
     updateWalletUI();
   });

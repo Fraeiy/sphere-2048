@@ -16,8 +16,10 @@
  * }
  */
 
-const MOVE_COST_UTC = 0.1; // Cost per move in smallest units (0.1 UCT)
-const MOVE_COST_ATOMIC = Math.round(MOVE_COST_UTC * 1e18); // Convert to atomic units (18 decimals)
+const MOVE_COST_UTC = 0.1; // Effective cost per move (0.1 UCT)
+const MOVE_COST_ATOMIC = Math.round(MOVE_COST_UTC * 1e18); // 0.1 UCT in atomic units
+const BILLING_CHUNK_MOVES = 10; // Charge once every 10 moves
+const BILLING_CHUNK_ATOMIC = Math.round(BILLING_CHUNK_MOVES * MOVE_COST_ATOMIC); // 1 UCT in atomic units
 
 /**
  * In-memory user balance store
@@ -38,6 +40,7 @@ export function initializeUser(userId, walletId) {
       balance: 0,
       totalDeposited: 0,
       movesLeft: 0,
+      pendingMovesInBatch: 0,
       totalMoves: 0,
       lastMove: null,
       highScore: 0,
@@ -81,14 +84,35 @@ export function deductMove(userId) {
     throw new Error(`User ${userId} not found`);
   }
 
-  if (user.balance < MOVE_COST_ATOMIC) {
-    return false; // Insufficient funds
+  if (user.movesLeft <= 0) {
+    return false; // No move credits left
   }
 
-  user.balance -= MOVE_COST_ATOMIC;
   user.movesLeft -= 1;
   user.totalMoves += 1;
+  user.pendingMovesInBatch = (user.pendingMovesInBatch || 0) + 1;
   user.lastMove = Date.now();
+
+  // Bill 1 UCT after every 10 successful moves.
+  if (user.pendingMovesInBatch >= BILLING_CHUNK_MOVES) {
+    if (user.balance < BILLING_CHUNK_ATOMIC) {
+      // Safety guard: this should not happen if movesLeft is consistent.
+      user.pendingMovesInBatch = BILLING_CHUNK_MOVES;
+      user.movesLeft += 1;
+      user.totalMoves -= 1;
+      return false;
+    }
+    user.balance -= BILLING_CHUNK_ATOMIC;
+    user.pendingMovesInBatch = 0;
+  }
+
+  // Final settlement: if all move credits are used, clear any remaining
+  // partial batch so the displayed balance cannot stay non-zero.
+  if (user.movesLeft === 0 && user.pendingMovesInBatch > 0) {
+    const remainingCharge = user.pendingMovesInBatch * MOVE_COST_ATOMIC;
+    user.balance = Math.max(0, user.balance - remainingCharge);
+    user.pendingMovesInBatch = 0;
+  }
 
   return true;
 }
@@ -109,8 +133,8 @@ export function getBalance(userId) {
  */
 export function canMove(userId) {
   const user = userBalances.get(userId);
-  const hasBalance = user && user.balance >= MOVE_COST_ATOMIC;
-  console.log(`[Balance] canMove(${userId}): user=${!!user}, balance=${user?.balance ?? 'N/A'}, needed=${MOVE_COST_ATOMIC}, can=${hasBalance}`);
+  const hasBalance = !!user && user.movesLeft > 0;
+  console.log(`[Balance] canMove(${userId}): user=${!!user}, movesLeft=${user?.movesLeft ?? 'N/A'}, pendingBatch=${user?.pendingMovesInBatch ?? 'N/A'}, can=${hasBalance}`);
   if (!user) {
     console.log(`[Balance] User not found in map. Keys: ${Array.from(userBalances.keys()).join(', ')}`);
   }
