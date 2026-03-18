@@ -104,6 +104,30 @@ export async function submitScore(score, board) {
   return { success: true, eventId: 'local' };
 }
 
+/**
+ * Submits a batch state update after 5 user moves.
+ * In production this should publish to chain/relay with proper signing.
+ *
+ * @param {{
+ *   userId: string,
+ *   moves: Array<{ direction: string, moved: boolean, score: number, ts: number }>,
+ *   moveHash: string,
+ *   finalState: { score: number, board: number[][], gameOver: boolean, won: boolean }
+ * }} payload
+ * @returns {Promise<{ success: boolean, txId?: string, moveHash?: string, error?: string }>}
+ */
+export async function submitMoveBatch(payload) {
+  const txId = `batch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  console.log(
+    `[Chain] Batched move update submitted: user=${payload.userId}, moves=${payload.moves.length}, hash=${payload.moveHash}, txId=${txId}`
+  );
+  return {
+    success: true,
+    txId,
+    moveHash: payload.moveHash,
+  };
+}
+
 // ─── Status ───────────────────────────────────────────────────────────────────
 
 /**

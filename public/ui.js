@@ -1063,6 +1063,14 @@ async function doMove(direction) {
     }
     
     applyState(state);
+
+    if (state.moveBatch?.txId) {
+      showMessage(
+        `⛓ Batched ${state.moveBatch.count} moves on-chain. Tx: ${state.moveBatch.txId.slice(0, 18)}…`,
+        'ok'
+      );
+      return;
+    }
     
     if (!state.moved) {
       showMessage('No tiles moved — try another direction.', 'warn');

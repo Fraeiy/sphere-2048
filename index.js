@@ -20,10 +20,10 @@ dotenv.config();
 import express from 'express';
 import { fileURLToPath } from 'url';
 import { dirname, join }  from 'path';
-import { randomUUID }     from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 
 import { GameState }    from './game.js';
-import { connectSphere, submitScore, getSphereStatus, publishGameWallet, getServerWalletAddress, simulateDeposit, getUserDeposits } from './sphere.js';
+import { connectSphere, submitScore, submitMoveBatch, getSphereStatus, publishGameWallet, getServerWalletAddress, simulateDeposit, getUserDeposits } from './sphere.js';
 import * as UserBalances from './userBalances.js';
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
@@ -66,6 +66,25 @@ const userBestScores = new Map();
 
 /** Session to userId mapping for quick lookup */
 const sessionUserMap = new Map();
+
+/**
+ * Per-user move buffer used for 5-move batching to chain.
+ * userId -> Array<{ direction, moved, score, ts }>
+ */
+const userMoveBuffers = new Map();
+
+const MOVE_BATCH_SIZE = 5;
+
+function pushMoveForBatch(userId, moveData) {
+  const buffer = userMoveBuffers.get(userId) ?? [];
+  buffer.push(moveData);
+  userMoveBuffers.set(userId, buffer);
+  return buffer;
+}
+
+function hashMoveBatch(moves) {
+  return createHash('sha256').update(JSON.stringify(moves)).digest('hex');
+}
 
 /**
  * Retrieves or creates a GameState for the given user.
@@ -402,7 +421,7 @@ app.post('/api/new', (req, res) => {
  * Response:
  *   { success: boolean, moved: boolean, balance?: object, ...gameState }
  */
-app.post('/api/move', (req, res) => {
+app.post('/api/move', async (req, res) => {
   const { userId, direction } = req.body;
 
   if (!userId) {
@@ -455,6 +474,43 @@ app.post('/api/move', (req, res) => {
       userBestScores.set(userId, state.score);
     }
 
+    // Track this move for 5-move on-chain batching.
+    const moveBuffer = pushMoveForBatch(userId, {
+      direction,
+      moved,
+      score: state.score,
+      ts: Date.now(),
+    });
+
+    let batchTx = null;
+    if (moveBuffer.length >= MOVE_BATCH_SIZE) {
+      const batchMoves = moveBuffer.slice(0, MOVE_BATCH_SIZE);
+      const moveHash = hashMoveBatch(batchMoves);
+
+      const chainResult = await submitMoveBatch({
+        userId,
+        moves: batchMoves,
+        moveHash,
+        finalState: {
+          score: state.score,
+          board: state.board,
+          gameOver: state.gameOver,
+          won: state.won,
+        },
+      });
+
+      if (chainResult.success) {
+        batchTx = {
+          txId: chainResult.txId,
+          moveHash,
+          count: batchMoves.length,
+        };
+        userMoveBuffers.set(userId, moveBuffer.slice(MOVE_BATCH_SIZE));
+      } else {
+        console.warn(`[Server] Move batch submission failed for ${userId}: ${chainResult.error || 'unknown error'}`);
+      }
+    }
+
     const user = UserBalances.getBalance(userId);
 
     res.json({ 
@@ -466,6 +522,7 @@ app.post('/api/move', (req, res) => {
         current: UserBalances.formatBalance(user.balance),
         movesLeft: user.movesLeft
       },
+      moveBatch: batchTx,
       ...state.toJSON() 
     });
   } catch (err) {
