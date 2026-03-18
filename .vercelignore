@@ -1,0 +1,8 @@
+node_modules
+.git
+.replit
+prompt
+sphere-tokens
+sphere-data
+*.md
+wallets.json

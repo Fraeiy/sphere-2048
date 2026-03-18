@@ -1,0 +1,17 @@
+{
+  "buildCommand": "",
+  "installCommand": "npm install",
+  "env": {
+    "SPHERE_NETWORK": "@sphere_network",
+    "GAME_TREASURY_ADDRESS": "@game_treasury_address",
+    "GAME_TREASURY_NAMETAG": "@game_treasury_nametag",
+    "GAME_TREASURY_PUBKEY": "@game_treasury_pubkey",
+    "GAME_TREASURY_MNEMONIC": "@game_treasury_mnemonic"
+  },
+  "functions": {
+    "index.js": {
+      "memory": 1024,
+      "maxDuration": 60
+    }
+  }
+}
