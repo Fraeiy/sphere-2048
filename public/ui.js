@@ -19,7 +19,9 @@
 // Based on Boxy-Run implementation: https://unicitynetwork.github.io/Boxy-Run/
 // Uses https://sphere.unicity.network (not unicity-connect:// protocol)
 const WALLET_URL = 'https://sphere.unicity.network';
-const GAME_TREASURY_ADDRESS = '@sphere2048'; // Use @nametag format like Boxy-Run uses @boxyrun
+let userId = null; // User ID for game state tracking
+let GAME_HANDLE = null; // Player's game wallet display (e.g., "fraey_2048")
+let DEPOSIT_ADDRESS = null; // Actual server wallet address to send deposits to
 const MOVE_COST_UTC = 1; // Cost per move in UTC
 const DEPOSIT_AMOUNT = 100; // Initial deposit amount in UTC
 const COIN_ID = 'UCT';
@@ -54,6 +56,9 @@ const AUTO_SUBMIT_MOVE_COUNT = 10; // Auto-submit after this many moves
 
 /** @type {boolean} */
 let isConnected = false;
+
+/** @type {boolean} - Wallet is ready for deposits after identity is published */
+let walletReady = false;
 
 /**
  * Check if running in iframe (based on Boxy-Run and SDK example)
@@ -104,6 +109,55 @@ function waitForHostReady() {
 }
 
 /**
+ * Registers the player with the game server.
+ * Simply stores their wallet identity for balance tracking.
+ * @param {object} identity - User's wallet identity { nametag, address }
+ * @returns {Promise<boolean>}
+ */
+async function registerPlayerWithGame(identity) {
+  try {
+    showMessage('🔧 Registering with game…', 'warn');
+    
+    const response = await fetch('/api/register', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionId,
+      },
+      body: JSON.stringify({ 
+        nametag: identity.nametag,
+        address: identity.address 
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
+    }
+
+    const result = await response.json();
+
+    if (result.success) {
+      GAME_HANDLE = identity.nametag || identity.address?.slice(0, 12) || 'Player';
+      DEPOSIT_ADDRESS = result.treasuryAddress;
+      walletReady = true;
+      console.log('[Wallet] ✅ Player registered:', GAME_HANDLE);
+      console.log('[Wallet] 📮 Treasury address:', DEPOSIT_ADDRESS);
+      showMessage(`💰 Send UCT to: ${GAME_HANDLE}`, 'ok');
+      updateWalletUI();
+      return true;
+    } else {
+      throw new Error(result.error || 'Failed to register player');
+    }
+  } catch (err) {
+    console.error('[Wallet] ❌ Failed to register player:', err);
+    showMessage(`❌ Wallet setup failed: ${err.message}`, 'err');
+    walletReady = false;
+    updateWalletUI();
+    return false;
+  }
+}
+
+/**
  * Connects to Sphere wallet via popup/iframe/extension (based on Boxy-Run and SDK example).
  * Uses https://sphere.unicity.network (not unicity-connect:// protocol)
  * Supports iframe mode, extension mode, and popup mode
@@ -147,6 +201,13 @@ async function connectWallet() {
                 const displayName = walletIdentity.nametag || walletIdentity.address?.slice(0, 20) || 'Sphere Wallet';
                 showMessage(`✅ Connected to ${displayName}…`, 'ok');
                 updateWalletUI();
+                
+                // Register with game server
+                if (walletIdentity.nametag || walletIdentity.address) {
+                  registerPlayerWithGame(walletIdentity)
+                    .catch(err => console.error('Failed to register with game:', err));
+                }
+                
                 checkBalance().catch(err => console.error('Balance check failed:', err));
                 resolve(true);
               } else {
@@ -247,6 +308,13 @@ async function connectWallet() {
                 const displayName = walletIdentity.nametag || walletIdentity.address?.slice(0, 20) || 'Sphere Wallet';
                 showMessage(`✅ Connected to ${displayName}…`, 'ok');
                 updateWalletUI();
+                
+                // Register with game server
+                if (walletIdentity.nametag || walletIdentity.address) {
+                  registerPlayerWithGame(walletIdentity)
+                    .catch(err => console.error('Failed to register with game:', err));
+                }
+                
                 checkBalance().catch(err => console.error('Balance check failed:', err));
                 resolve(true);
               } else {
@@ -404,8 +472,18 @@ async function depositToPlay() {
     return false;
   }
 
+  if (!walletReady) {
+    showMessage('⏳ Game wallet still initializing… Please wait.', 'warn');
+    return false;
+  }
+
   if (!walletIdentity?.nametag) {
     showMessage('❌ Unicity ID required. Please register a Unicity ID in Sphere to play.', 'err');
+    return false;
+  }
+
+  if (!GAME_HANDLE) {
+    showMessage('❌ Game wallet not ready. Please refresh the page.', 'err');
     return false;
   }
 
@@ -501,7 +579,7 @@ async function depositToPlay() {
         id: intentId,
         action: 'send',
         params: {
-          to: GAME_TREASURY_ADDRESS,
+          to: DEPOSIT_ADDRESS,
           amount: DEPOSIT_AMOUNT,
           coinId: uctCoinId,
           memo: '2048 game deposit'
@@ -562,11 +640,13 @@ function updateWalletUI() {
     if (connectBtn) {
       connectBtn.style.display = 'none';
     }
-    // Show deposit button (always available after connection)
+    // Show deposit button (disabled until wallet is ready)
     if (depositBtn) {
       depositBtn.style.display = 'block';
-      depositBtn.disabled = false;
-      depositBtn.textContent = `💰 Deposit (${DEPOSIT_AMOUNT} UTC)`;
+      depositBtn.disabled = !walletReady; // Disabled until wallet is ready
+      depositBtn.textContent = walletReady 
+        ? `💰 Deposit (${DEPOSIT_AMOUNT} UTC)` 
+        : '⏳ Initializing wallet…';
     }
     // Show wallet info
     if (walletInfoEl) {

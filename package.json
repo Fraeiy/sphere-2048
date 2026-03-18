@@ -6,11 +6,19 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "dev": "node --watch index.js"
+    "dev": "node --watch index.js",
+    "test-api": "node test-api.js",
+    "cli": "tsx node_modules/@unicitylabs/sphere-sdk/src/cli.ts"
   },
   "dependencies": {
     "@unicitylabs/sphere-sdk": "^0.6.1",
+    "bip32": "^5.0.1",
+    "bip39": "^3.1.0",
+    "dotenv": "^16.6.1",
     "express": "^4.22.1",
+    "fs": "^0.0.1-security",
+    "tiny-secp256k1": "^2.2.4",
+    "tsx": "^4.21.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {

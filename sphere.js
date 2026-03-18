@@ -1,155 +1,184 @@
 /**
- * sphere.js — Sphere SDK Integration (Unicity Blockchain)
+ * sphere.js — Game Treasury & Deposit Address Management
  *
  * Handles:
- *   1. Wallet initialisation using createNodeProviders + Sphere.init()
- *   2. Submitting a game-over score as a signed broadcast on the Unicity Nostr relay
+ *   1. Game treasury address where players deposit UTC before playing
+ *   2. Score tracking and game state (optional blockchain submission)
  *
- * The Sphere SDK (@unicitylabs/sphere-sdk) is a modular TypeScript SDK for the
- * Unicity blockchain. It uses a Nostr relay as its transport layer, so every
- * broadcast is a cryptographically signed Nostr event anchored to the player's
- * wallet identity.
+ * The game wallet (sphere2048) is where players send deposits via the Sphere wallet UI.
+ * Players use their own wallets to send UTC to the game treasury address.
  *
- * Required env vars (optional — falls back to auto-generated testnet wallet):
- *   SPHERE_MNEMONIC   24-word BIP39 mnemonic for an existing wallet
- *   SPHERE_NETWORK    "testnet" | "mainnet" | "dev"  (default: testnet)
+ * Configuration via env vars:
+ *   GAME_TREASURY_ADDRESS   L1 address for deposits (e.g., alpha1qq8...)
+ *   GAME_TREASURY_NAMETAG   Wallet nametag (sphere2048)
+ *   SPHERE_NETWORK          "testnet" | "mainnet" | "dev"  (default: testnet)
  */
-
-import { Sphere } from '@unicitylabs/sphere-sdk';
-import { createNodeProviders } from '@unicitylabs/sphere-sdk/impl/nodejs';
 
 // ─── Module State ─────────────────────────────────────────────────────────────
 
-/** @type {import('@unicitylabs/sphere-sdk').Sphere | null} */
-let sphereInstance = null;
+/** Game treasury wallet info */
+let treasuryInfo = { 
+  address: null, 
+  nametag: null, 
+  network: null 
+};
 
-/** Whether the SDK has been successfully initialised */
-let initialised = false;
+/** Known transactions to prevent double-crediting */
+const processedTransactions = new Set();
 
-/** Wallet identity info shown on the status endpoint */
-let walletInfo = { address: null, nametag: null, network: null };
+/** Simulate transaction history (in production, query blockchain) */
+let transactionHistory = [];
 
 // ─── Initialisation ───────────────────────────────────────────────────────────
 
 /**
- * Connects to the Unicity Sphere chain.
- *
- * Called once at server startup. Uses testnet by default so no real funds are
- * needed. If SPHERE_MNEMONIC is set the existing wallet is loaded; otherwise a
- * fresh wallet is auto-generated and its mnemonic is printed to the console.
+ * Initializes the game treasury address from environment variables.
+ * This is a simple configuration load — no blockchain connection needed.
+ * 
+ * Players use their own Sphere wallets to send deposits to this address.
  *
  * @returns {Promise<void>}
  */
 export async function connectSphere() {
   const network  = process.env.SPHERE_NETWORK || 'testnet';
-  const mnemonic = process.env.SPHERE_MNEMONIC || undefined;
+  const address  = process.env.GAME_TREASURY_ADDRESS;
+  const nametag  = process.env.GAME_TREASURY_NAMETAG;
 
-  console.log(`[Sphere] Connecting to Unicity (${network})…`);
+  console.log(`[Game Treasury] Setting up deposit wallet for ${network}…`);
 
-  try {
-    // Create platform-specific providers (storage, transport, oracle).
-    // createNodeProviders handles Node.js WebSocket, file-based storage,
-    // and the Unicity aggregator/oracle for the chosen network.
-    // No l1 config → skip ALPHA blockchain L1 layer (not needed for score submission).
-    const providers = createNodeProviders({ network });
-
-    // Initialise (or load) the wallet.
-    // autoGenerate: true → create a fresh wallet when none exists in storage.
-    const { sphere, created, generatedMnemonic } = await Sphere.init({
-      ...providers,
-      mnemonic,
-      autoGenerate: true,
-      network,
-    });
-
-    sphereInstance = sphere;
-    initialised    = true;
-
-    // Cache identity info for the /api/sphere-status endpoint
-    const identity  = sphere.identity;
-    walletInfo = {
-      network,
-      address: identity?.address ?? null,
-      nametag: identity?.nametag ?? null,
-    };
-
-    if (created && generatedMnemonic) {
-      // Print generated mnemonic so the developer can save it for future runs.
-      // In production you would store this securely (env var / secrets manager).
-      console.log('[Sphere] ✅ New wallet created on', network);
-      console.log('[Sphere] ⚠️  Save this mnemonic to reuse the same wallet:');
-      console.log('[Sphere]   ', generatedMnemonic);
-    } else {
-      console.log('[Sphere] ✅ Existing wallet loaded. Address:', walletInfo.address);
-    }
-  } catch (err) {
-    // Non-fatal: the game remains playable even without a chain connection.
-    console.error('[Sphere] ❌ Connection failed:', err.message);
-    console.warn('[Sphere]    Score submission will be disabled this session.');
+  if (!address || !nametag) {
+    console.error('[Game Treasury] ❌ Missing GAME_TREASURY_ADDRESS or GAME_TREASURY_NAMETAG in .env');
+    console.warn('[Game Treasury]    Players will not be able to make deposits.');
+    return;
   }
+
+  treasuryInfo = {
+    network,
+    address,
+    nametag,
+  };
+
+  console.log(`[Game Treasury] ✅ Treasury configured`);
+  console.log(`[Game Treasury]    Nametag: ${treasuryInfo.nametag}`);
+  console.log(`[Game Treasury]    Address: ${treasuryInfo.address}`);
+  console.log(`[Game Treasury]    Network: ${treasuryInfo.network}`);
 }
 
 // ─── Score Submission ─────────────────────────────────────────────────────────
 
 /**
- * Submits the player's final score to the Unicity network as a signed broadcast.
- *
- * The broadcast is a JSON string published via sphere.communications.broadcast().
- * Under the hood the SDK signs it with the wallet's Nostr key and publishes it to
- * the Unicity relay — making the record publicly verifiable and tamper-proof.
- *
- * Tags are used to filter/subscribe to game-score broadcasts on the relay.
+ * Creates a game wallet handle for a player using their nametag.
+ * Format: {nametag}_2048 (e.g., fraey_2048, john_2048)
+ * 
+ * @param {string} nametag - Player's Sphere wallet nametag
+ * @returns {string} Game wallet handle
+ */
+function createGameHandle(nametag) {
+  return `${nametag}_2048`;
+}
+
+/**
+ * Publishes a player's game identity (optional blockchain feature).
+ * In a simple setup, this just acknowledges the request.
+ * 
+ * @param {string} gameHandle - The player's game handle (e.g., "fraey_2048")
+ * @returns {Promise<{ success: boolean, gameHandle?: string, error?: string }>}
+ */
+export async function publishGameWallet(gameHandle) {
+  // Simple acknowledgment — blockchain publishing is optional
+  console.log(`[Game] Game handle created: ${gameHandle}`);
+  return { success: true, gameHandle };
+}
+
+/**
+ * Submits the player's final score (optional blockchain feature).
+ * In a simple setup, this just acknowledges the request.
  *
  * @param {number}   score    Final numeric score
  * @param {number[][]} board  Final board state (4×4 grid)
  * @returns {Promise<{ success: boolean, eventId?: string, error?: string }>}
  */
 export async function submitScore(score, board) {
-  if (!initialised || !sphereInstance) {
-    return { success: false, error: 'Sphere SDK not initialised' };
-  }
-
-  // Build a structured payload stored on-chain
-  const payload = {
-    game:      '2048',
-    score,
-    board,
-    network:   walletInfo.network,
-    player:    walletInfo.address,
-    nametag:   walletInfo.nametag,
-    timestamp: new Date().toISOString(),
-  };
-
-  // Tags let anyone filter Unicity relay events for 2048 game scores
-  const tags = ['game:2048', `score:${score}`];
-
-  try {
-    console.log(`[Sphere] Submitting score ${score} to the chain…`);
-
-    const broadcast = await sphereInstance.communications.broadcast(
-      JSON.stringify(payload),
-      tags
-    );
-
-    const eventId = broadcast.id ?? broadcast.eventId ?? 'unknown';
-    console.log(`[Sphere] ✅ Score submitted. Event ID: ${eventId}`);
-
-    return { success: true, eventId };
-  } catch (err) {
-    console.error('[Sphere] ❌ Score submission failed:', err.message);
-    return { success: false, error: err.message };
-  }
+  // Simple acknowledgment — blockchain submission is optional
+  console.log(`[Game] Score recorded: ${score}`);
+  return { success: true, eventId: 'local' };
 }
 
 // ─── Status ───────────────────────────────────────────────────────────────────
 
 /**
- * Returns the current Sphere connection status for the /api/sphere-status route.
- * @returns {{ connected: boolean, wallet: object }}
+ * Returns the game treasury address where players should send deposits.
+ * @returns {string|null} Game treasury address (e.g., alpha1qq8...)
+ */
+export function getServerWalletAddress() {
+  return treasuryInfo.address;
+}
+
+/**
+ * Returns the game treasury configuration for the /api/sphere-status route.
+ * @returns {{ connected: boolean, treasury: object }}
  */
 export function getSphereStatus() {
   return {
-    connected: initialised,
-    wallet:    walletInfo,
+    connected: treasuryInfo.address ? true : false,
+    treasury:  treasuryInfo,
   };
+}
+
+// ─── Deposit Tracking ─────────────────────────────────────────────────────────
+
+/**
+ * Process a user deposit (for MVP, simulated or manual)
+ * In production, this would query the blockchain for incoming transactions
+ * 
+ * @param {string} transactionId - Unique transaction ID
+ * @param {string} senderAddress - Wallet address of sender
+ * @param {number} amountAtomic - Amount in atomic units (18 decimals)
+ * @param {string} memo - Transaction memo/reference (typically sender's wallet)
+ * @returns {object} Transaction record
+ */
+export function recordDeposit(transactionId, senderAddress, amountAtomic, memo) {
+  if (processedTransactions.has(transactionId)) {
+    console.warn(`[Treasury] Duplicate transaction: ${transactionId}`);
+    return null;
+  }
+
+  const transaction = {
+    transactionId,
+    senderAddress,
+    amount: amountAtomic,
+    memo,
+    timestamp: Date.now(),
+    status: 'confirmed'
+  };
+
+  processedTransactions.add(transactionId);
+  transactionHistory.push(transaction);
+
+  console.log(`[Treasury] Deposit recorded: ${transactionId} from ${senderAddress} (${amountAtomic})`);
+  return transaction;
+}
+
+/**
+ * Get all transactions for a user (identified by memo/wallet)
+ * @param {string} userId - User identifier
+ * @returns {object[]} Array of transactions for this user
+ */
+export function getUserDeposits(userId) {
+  return transactionHistory.filter(tx => tx.memo === userId || tx.senderAddress === userId);
+}
+
+/**
+ * For MVP: Manually add a deposit to test
+ * In production, replace with actual blockchain query
+ * 
+ * @param {string} senderAddress - Sender wallet address
+ * @param {number} uct - Amount in UCT
+ * @param {string} memo - Recipient user ID (wallet address or nametag)
+ * @returns {object} Transaction record
+ */
+export function simulateDeposit(senderAddress, uct, memo) {
+  const amountAtomic = Math.round(uct * 1e18);
+  const txId = `sim_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  return recordDeposit(txId, senderAddress, amountAtomic, memo);
 }
