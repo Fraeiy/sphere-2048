@@ -1,5 +1,6 @@
 {
-  "buildCommand": "",
+  "framework": "nodejs",
+  "buildCommand": "true",
   "installCommand": "npm install",
   "env": {
     "SPHERE_NETWORK": "@sphere_network",
