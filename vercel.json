@@ -3,13 +3,6 @@
   "buildCommand": "npm ci --only=production",
   "installCommand": "npm ci",
   "outputDirectory": ".",
-  "env": {
-    "SPHERE_NETWORK": "@sphere_network",
-    "GAME_TREASURY_ADDRESS": "@game_treasury_address",
-    "GAME_TREASURY_NAMETAG": "@game_treasury_nametag",
-    "GAME_TREASURY_PUBKEY": "@game_treasury_pubkey",
-    "GAME_TREASURY_MNEMONIC": "@game_treasury_mnemonic"
-  },
   "routes": [
     { "src": "/(.*)", "dest": "index.js" }
   ]
