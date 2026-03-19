@@ -648,86 +648,6 @@ app.post('/api/submit-score', (req, res) => {
   }
 });
 
-/**
- * POST /api/test-deposit
- * TEST ONLY: Manually add a deposit for testing
- *
- * Body:
- *   { userId: string, uct: number }
- *
- * Response:
- *   { success: boolean, balance: object }
- */
-app.post('/api/test-deposit', (req, res) => {
-  const { userId, uct } = req.body;
-
-  if (!userId || !uct) {
-    return res.status(400).json({ 
-      success: false, 
-      error: 'userId and uct required' 
-    });
-  }
-
-  try {
-    console.log(`[Test Deposit] Attempting deposit for ${userId}: ${uct} UCT`);
-    
-    // Ensure user exists
-    let user = UserBalances.getBalance(userId);
-    if (!user) {
-      console.log(`[Test Deposit] User ${userId} not found, initializing...`);
-      UserBalances.initializeUser(userId, userId);
-      user = UserBalances.getBalance(userId);
-    }
-    
-    console.log(`[Test Deposit] Before deposit - balance: ${user.balance}, movesLeft: ${user.movesLeft}`);
-
-    // Add deposit in atomic units (18 decimals)
-    const amountAtomic = Math.round(uct * 1e18);
-    console.log(`[Test Deposit] Adding ${uct} UCT (${amountAtomic} atomic units)`);
-    
-    user = UserBalances.addDeposit(userId, amountAtomic);
-    
-    console.log(`[Test Deposit] After deposit - balance: ${user.balance}, movesLeft: ${user.movesLeft}`);
-
-    res.json({ 
-      success: true,
-      userId,
-      deposit: uct,
-      balance: {
-        current: UserBalances.formatBalance(user.balance),
-        totalDeposited: UserBalances.formatBalance(user.totalDeposited),
-        movesLeft: user.movesLeft
-      }
-    });
-  } catch (err) {
-    console.error('[Server] Test deposit error:', err);
-    res.status(500).json({ 
-      success: false, 
-      error: err.message 
-    });
-  }
-});
-
-/**
- * GET /api/debug/balances
- * DEBUG ONLY: Returns all user balances
- */
-app.get('/api/debug/balances', (req, res) => {
-  const allUsers = UserBalances.getAllUsers();
-  console.log('[Debug] All users:', allUsers);
-  
-  res.json({ 
-    userCount: allUsers.length,
-    users: allUsers.map(u => ({
-      walletId: u.walletId,
-      balance: UserBalances.formatBalance(u.balance),
-      totalDeposited: UserBalances.formatBalance(u.totalDeposited),
-      movesLeft: u.movesLeft,
-      totalMoves: u.totalMoves,
-      highScore: u.highScore
-    }))
-  });
-});
 
 /**
  * GET /api/leaderboard
@@ -737,7 +657,7 @@ app.get('/api/debug/balances', (req, res) => {
  *   limit - Number of results (default: 10)
  */
 app.get('/api/leaderboard', (req, res) => {
-  const limit = parseInt(req.query.limit) || 10;
+  const limit = parseInt(req.query.limit, 10) || 10;
 
   try {
     const leaderboard = UserBalances.getLeaderboard(limit)

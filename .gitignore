@@ -2,3 +2,9 @@ node_modules
 dist
 .env
 .env.local
+.env.*.local
+
+# Wallet credential files – must never be committed
+wallets.json
+sphere-data/
+sphere-tokens/
