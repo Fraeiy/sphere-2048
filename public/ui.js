@@ -1061,16 +1061,20 @@ function showMessage(text, type = '') {
 function renderSphereStatus(status) {
   const { connected, wallet } = status;
 
+  spherePillEl.textContent = '';
+
+  const label = document.createElement('strong');
+  label.textContent = '⛓ Sphere:';
+  spherePillEl.appendChild(label);
+
   if (!connected) {
-    spherePillEl.innerHTML = `<strong>⛓ Sphere:</strong> Not connected — score submission disabled.`;
+    spherePillEl.appendChild(document.createTextNode(' Not connected — score submission disabled.'));
     return;
   }
 
-  const parts = [`<strong>⛓ Sphere:</strong> Connected to Unicity (${wallet.network})`];
-  if (wallet.nametag) parts.push(`· @${wallet.nametag}`);
-  if (wallet.address) parts.push(`· ${wallet.address.slice(0, 20)}…`);
-
-  spherePillEl.innerHTML = parts.join(' ');
+  spherePillEl.appendChild(document.createTextNode(` Connected to Unicity (${wallet.network})`));
+  if (wallet.nametag) spherePillEl.appendChild(document.createTextNode(` · @${wallet.nametag}`));
+  if (wallet.address) spherePillEl.appendChild(document.createTextNode(` · ${wallet.address.slice(0, 20)}…`));
 }
 
 /** Polls Sphere status every 5 seconds until connected, then every 30 seconds. */
