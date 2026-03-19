@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@unicitylabs/sphere-sdk": "^0.6.1",
+    "@vercel/speed-insights": "^2.0.0",
     "bip32": "^5.0.1",
     "bip39": "^3.1.0",
     "dotenv": "^16.6.1",
@@ -20,6 +21,5 @@
     "tiny-secp256k1": "^2.2.4",
     "tsx": "^4.21.0",
     "ws": "^8.19.0"
-  },
-  "devDependencies": {}
+  }
 }
