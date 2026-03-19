@@ -82,6 +82,13 @@ const userBatchQueues = new Map();
 /** Users currently being processed by batch worker. */
 const userBatchProcessing = new Set();
 
+/** Leaderboard cache for performance optimization */
+const leaderboardCache = {
+  data: null,
+  timestamp: 0,
+  ttl: 30000 // 30 seconds
+};
+
 const MOVE_BATCH_SIZE = 5;
 
 function pushMoveForBatch(userId, moveData) {
@@ -743,6 +750,17 @@ app.get('/api/leaderboard', (req, res) => {
   const limit = parseInt(req.query.limit, 10) || 10;
 
   try {
+    // Check cache first (performance optimization)
+    const now = Date.now();
+    if (leaderboardCache.data && (now - leaderboardCache.timestamp) < leaderboardCache.ttl) {
+      return res.json({ 
+        success: true,
+        leaderboard: leaderboardCache.data.slice(0, limit),
+        cached: true
+      });
+    }
+
+    // Compute and cache leaderboard
     const leaderboard = UserBalances.getLeaderboard(limit)
       .map((user, index) => ({
         rank: index + 1,
@@ -750,6 +768,9 @@ app.get('/api/leaderboard', (req, res) => {
         highScore: user.highScore,
         totalMoves: user.totalMoves
       }));
+
+    leaderboardCache.data = leaderboard;
+    leaderboardCache.timestamp = now;
 
     res.json({ 
       success: true,

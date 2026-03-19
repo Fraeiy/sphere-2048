@@ -70,6 +70,12 @@ let currentMovesLeft = 0;
 /** @type {number} - Current game score (from server) */
 let currentScore = 0;
 
+/** @type {object|null} - Cached balance from last state */
+let lastBalanceState = null;
+
+/** @type {number} - Timestamp of last balance sync */
+let lastBalanceSyncTime = 0;
+
 /**
  * Syncs displayed in-game balance from server-provided UCT value.
  * @param {number|string} currentUct
@@ -894,53 +900,22 @@ function shortWalletId(value) {
 function renderLeaderboardRows(entries) {
   if (!leaderboardBodyEl) return;
 
-  leaderboardBodyEl.textContent = '';
-
-  const fragment = document.createDocumentFragment();
-
-  const header = document.createElement('div');
-  header.className = 'leaderboard-row header';
-  header.innerHTML = '<div>Rank</div><div>Player</div><div style="text-align:right;">High Score</div><div style="text-align:right;">Moves</div>';
-  fragment.appendChild(header);
+  // Optimized: Use innerHTML for batch rendering (much faster than DOM manipulation)
+  let html = '<div class="leaderboard-row header"><div>Rank</div><div>Player</div><div style="text-align:right;">High Score</div><div style="text-align:right;">Moves</div></div>';
 
   if (!entries.length) {
-    const empty = document.createElement('div');
-    empty.className = 'leaderboard-empty';
-    empty.textContent = 'No players on the board yet. Play a few rounds to populate it.';
-    fragment.appendChild(empty);
-    leaderboardBodyEl.appendChild(fragment);
+    html += '<div class="leaderboard-empty">No players on the board yet. Play a few rounds to populate it.</div>';
+    leaderboardBodyEl.innerHTML = html;
     return;
   }
 
+  // Build all HTML at once
   for (const item of entries) {
-    const row = document.createElement('div');
-    row.className = 'leaderboard-row';
-
-    const rank = document.createElement('div');
-    rank.className = 'leaderboard-rank';
-    rank.textContent = `#${item.rank}`;
-
-    const player = document.createElement('div');
-    player.className = 'leaderboard-player';
-    player.textContent = shortWalletId(item.walletId);
-    player.title = item.walletId;
-
-    const score = document.createElement('div');
-    score.className = 'leaderboard-score';
-    score.textContent = String(item.highScore ?? 0);
-
-    const moves = document.createElement('div');
-    moves.className = 'leaderboard-moves';
-    moves.textContent = String(item.totalMoves ?? 0);
-
-    row.appendChild(rank);
-    row.appendChild(player);
-    row.appendChild(score);
-    row.appendChild(moves);
-    fragment.appendChild(row);
+    const playerName = shortWalletId(item.walletId);
+    html += `<div class="leaderboard-row"><div class="leaderboard-rank">#${item.rank}</div><div class="leaderboard-player" title="${item.walletId}">${playerName}</div><div class="leaderboard-score">${item.highScore ?? 0}</div><div class="leaderboard-moves">${item.totalMoves ?? 0}</div></div>`;
   }
 
-  leaderboardBodyEl.appendChild(fragment);
+  leaderboardBodyEl.innerHTML = html;
 }
 
 async function loadLeaderboard(forceRefresh = false) {
@@ -958,11 +933,19 @@ async function loadLeaderboard(forceRefresh = false) {
     leaderboardBodyEl.innerHTML = '<div class="leaderboard-empty">Refreshing leaderboard…</div>';
   }
 
-  const result = await fetchLeaderboard(100);
-  const entries = Array.isArray(result?.leaderboard) ? result.leaderboard : [];
-  leaderboardCache.entries = entries;
-  leaderboardCache.fetchedAt = Date.now();
-  renderLeaderboardRows(entries);
+  try {
+    const result = await fetchLeaderboard(100);
+    const entries = Array.isArray(result?.leaderboard) ? result.leaderboard : [];
+    leaderboardCache.entries = entries;
+    leaderboardCache.fetchedAt = Date.now();
+    renderLeaderboardRows(entries);
+  } catch (err) {
+    console.error('[Leaderboard] Load error:', err);
+    if (leaderboardBodyEl) {
+      leaderboardBodyEl.innerHTML = '<div class="leaderboard-empty">Failed to load leaderboard</div>';
+    }
+  }
+}
 }
 
 async function openLeaderboard() {
@@ -1274,6 +1257,15 @@ async function doMove(direction) {
     
     // Only apply state if move was successful (no errors)
     applyState(state);
+
+    // CRITICAL FIX: Update currentMovesLeft immediately from server response
+    // This prevents stale state where the UI thinks there are moves but there aren't
+    if (state.balance?.movesLeft !== undefined) {
+      currentMovesLeft = state.balance.movesLeft;
+      lastBalanceState = state.balance;
+      lastBalanceSyncTime = Date.now();
+      console.log(`[Move] Synced moves: ${currentMovesLeft}`);
+    }
 
     if (state.moveBatch?.txHash) {
       showMessage(
