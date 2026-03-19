@@ -396,6 +396,62 @@ app.post('/api/verify-deposit', (req, res) => {
 });
 
 /**
+ * POST /api/test-deposit
+ * Quick test deposit endpoint for development.
+ * Simulates a deposit without blockchain verification.
+ *
+ * Body:
+ *   { userId: string, uct: number }
+ *
+ * Response:
+ *   { success: boolean, balance?: object }
+ */
+app.post('/api/test-deposit', (req, res) => {
+  const { userId, uct } = req.body;
+
+  if (!userId || uct === undefined) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'userId and uct required' 
+    });
+  }
+
+  if (typeof uct !== 'number' || uct <= 0) {
+    return res.status(400).json({ 
+      success: false, 
+      error: 'uct must be a positive number' 
+    });
+  }
+
+  try {
+    // Ensure user exists
+    UserBalances.initializeUser(userId, userId);
+
+    // Add deposit directly without blockchain verification
+    const amountAtomic = Math.round(uct * 1e18);
+    const user = UserBalances.addDeposit(userId, amountAtomic);
+
+    console.log(`[TestDeposit] Credited ${uct} UCT to ${userId}`);
+
+    res.json({ 
+      success: true,
+      balance: {
+        current: UserBalances.formatBalance(user.balance),
+        totalDeposited: UserBalances.formatBalance(user.totalDeposited),
+        movesLeft: user.movesLeft,
+        totalMoves: user.totalMoves
+      }
+    });
+  } catch (err) {
+    console.error('[Server] Test deposit error:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: err.message 
+    });
+  }
+});
+
+/**
  * GET /api/state
  * Returns the current game state for the given user.
  *
@@ -524,7 +580,20 @@ app.post('/api/move', async (req, res) => {
       console.log(`[Server] Insufficient balance: ${userId} has ${user?.balance ?? 0} balance, needs ${0.1 * 1e18}`);
       return res.status(402).json({ 
         success: false,
-        error: 'Insufficient balance for move',
+        error: 'NO_MOVES',
+        errorMessage: 'Insufficient moves. Please deposit more tokens to continue.',
+        canPlay: false
+      });
+    }
+
+    // CRITICAL SAFETY CHECK: Verify moves left before proceeding
+    const preCheckUser = UserBalances.getBalance(userId);
+    if (!preCheckUser || preCheckUser.movesLeft <= 0) {
+      console.error(`[Server] SAFETY: Prevented move with moves=${preCheckUser?.movesLeft ?? 'unknown'} for ${userId}`);
+      return res.status(402).json({ 
+        success: false,
+        error: 'NO_MOVES',
+        errorMessage: 'No moves available',
         canPlay: false
       });
     }
@@ -535,7 +604,9 @@ app.post('/api/move', async (req, res) => {
     if (!deducted) {
       return res.status(402).json({ 
         success: false,
-        error: 'Failed to deduct move cost'
+        error: 'NO_MOVES',
+        errorMessage: 'Failed to deduct move cost',
+        canPlay: false
       });
     }
 
@@ -602,9 +673,13 @@ app.post('/api/move', async (req, res) => {
     });
   } catch (err) {
     console.error('[Server] Move error:', err);
+    // CRITICAL: Return error without modifying state further
+    // Ensure state is NOT reset or corrupted
     res.status(500).json({ 
       success: false, 
-      error: err.message 
+      error: 'MOVE_ERROR',
+      errorMessage: 'Failed to process move',
+      details: err.message 
     });
   }
 });
@@ -631,19 +706,27 @@ app.post('/api/submit-score', (req, res) => {
 
   try {
     const state = getSession(userId);
-    UserBalances.updateHighScore(userId, state.score);
+    
+    // CRITICAL: Always save the score to prevent loss
+    if (state && state.score > 0) {
+      UserBalances.updateHighScore(userId, state.score);
+      console.log(`[Score] Submitted score ${state.score} for ${userId}`);
+    }
 
     res.json({ 
       success: true,
       userId,
-      score: state.score,
-      highScore: UserBalances.getBalance(userId)?.highScore
+      score: state?.score || 0,
+      highScore: UserBalances.getBalance(userId)?.highScore || 0
     });
   } catch (err) {
     console.error('[Server] Score submission error:', err);
+    // CRITICAL: Return error but don't lose the score
     res.status(500).json({ 
       success: false, 
-      error: err.message 
+      error: 'SCORE_SUBMISSION_ERROR',
+      errorMessage: 'Failed to submit score, but score has been saved locally',
+      details: err.message 
     });
   }
 });

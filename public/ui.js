@@ -61,6 +61,15 @@ let isConnected = false;
 /** @type {boolean} - Wallet is ready for deposits after identity is published */
 let walletReady = false;
 
+/** @type {boolean} - Prevents spam clicks on move button */
+let moveRequestInFlight = false;
+
+/** @type {number} - Current game moves left (from server) */
+let currentMovesLeft = 0;
+
+/** @type {number} - Current game score (from server) */
+let currentScore = 0;
+
 /**
  * Syncs displayed in-game balance from server-provided UCT value.
  * @param {number|string} currentUct
@@ -204,11 +213,8 @@ async function registerPlayerWithGame(identity) {
             console.log(`[Balance] Current: ${current} UCT, Moves left: ${movesLeft}, Total deposited: ${totalDeposited} UCT`);
             if (movesLeft > 0) {
               showMessage(`💰 Welcome back! You have ${movesLeft} moves (${current} UCT)`, 'ok');
-              // Auto-start game if they have moves
-              setTimeout(() => {
-                showMessage('🎮 Starting new game…', 'ok');
-                newGame().catch(err => console.error('Failed to start game:', err));
-              }, 500);
+              // FIXED: Don't auto-start game - just update balance and show state
+              // User can start game manually if they want
               return true;
             } else {
               // No moves - show test deposit info
@@ -664,9 +670,11 @@ async function depositToPlay(depositAmount) {
                     // Sync with backend-tracked balance after credit.
                     if (data?.balance?.current !== undefined) {
                       syncGameDepositFromServer(data.balance.current);
+                      currentMovesLeft = data.balance?.movesLeft || 0;
                     }
                     moveCount = 0; // Reset move count on new deposit
-                    showMessage(`✅ Deposited ${depositAmount} ${COIN_ID}! In-game balance: ${gameDepositBalance.toFixed(2)} UTC`, 'ok');
+                    updateMoveButtonStates(); // Re-enable move buttons
+                    showMessage(`✅ Deposited ${depositAmount} ${COIN_ID}! In-game balance: ${gameDepositBalance.toFixed(2)} UTC. Moves available: ${currentMovesLeft}`, 'ok');
                     sessionStorage.setItem(DEPOSIT_KEY, 'true');
                     updateBalanceDisplay();
                     checkBalance().catch(err => console.error('Balance check failed:', err));
@@ -812,8 +820,25 @@ async function api(path, options = {}) {
       ...(options.headers ?? {}),
     },
   });
-  if (!res.ok) throw new Error(`API ${path} → ${res.status}`);
-  return res.json();
+  
+  const data = await res.json().catch(err => {
+    console.error('[API] Failed to parse response:', err);
+    throw new Error(`API ${path} → ${res.status} (invalid JSON)`);
+  });
+  
+  // Check for error responses from server
+  if (!res.ok) {
+    console.error('[API] Server error:', { path, status: res.status, data });
+    throw new Error(data?.errorMessage || data?.error || `API ${path} → ${res.status}`);
+  }
+  
+  // Additional safety check: if success flag exists and is false, treat as error
+  if (data && typeof data.success === 'boolean' && !data.success) {
+    console.error('[API] Request failed according to success flag:', { path, data });
+    throw new Error(data?.errorMessage || data?.error || `API request failed: ${path}`);
+  }
+  
+  return data;
 }
 
 /** GET /api/state — returns current game state */
@@ -999,6 +1024,42 @@ function renderBoard(board) {
 let scoreSubmitted = false;
 
 /**
+ * Updates the visual state of all move buttons based on game conditions.
+ * Disables buttons when:
+ *   - No wallet is connected
+ *   - Game is over
+ *   - No moves are left
+ *   - A move request is in flight
+ */
+function updateMoveButtonStates() {
+  const arrowPad = document.querySelector('.arrow-pad');
+  if (!arrowPad) return;
+  
+  const buttons = arrowPad.querySelectorAll('button[data-dir]');
+  const shouldDisable = !isConnected || currentMovesLeft <= 0 || moveRequestInFlight;
+  
+  buttons.forEach(btn => {
+    if (shouldDisable) {
+      btn.disabled = true;
+      btn.style.opacity = '0.5';
+      btn.style.cursor = 'not-allowed';
+    } else {
+      btn.disabled = false;
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+    }
+  });
+  
+  // Also disable keyboard if no moves
+  if (currentMovesLeft <= 0 && !moveRequestInFlight) {
+    // Show feedback to user
+    if (currentMovesLeft === 0) {
+      showMessage('❌ No moves left. Please deposit more tokens to continue.', 'err');
+    }
+  }
+}
+
+/**
  * Applies a full game state snapshot returned by the API:
  *   • Updates the board, score, and best-score display
  *   • Shows/hides the game-over / win overlay
@@ -1012,6 +1073,22 @@ function applyState(state) {
   renderBoard(state.board);
   scoreEl.textContent = state.score;
   bestEl.textContent  = state.best;
+  
+  // Track current game state
+  currentScore = state.score;
+  if (state.balance?.movesLeft !== undefined) {
+    currentMovesLeft = state.balance.movesLeft;
+    // CRITICAL: Auto-save score when moves reach 0
+    if (currentMovesLeft === 0 && state.score > 0 && !scoreSubmitted) {
+      console.log('[State] Moves reached 0. Auto-saving score...');
+      autoSubmitScore(state.score, state.board).catch(err => 
+        console.error('Auto-submit when moves=0 failed:', err)
+      );
+    }
+  }
+  
+  // Update button states based on available moves
+  updateMoveButtonStates();
   
   // Log balance info from state
   if (state.balance) {
@@ -1134,6 +1211,9 @@ async function newGame() {
     console.log('[Game] Calling fetchNew for userId:', userId);
     const state = await fetchNew();
     console.log('[Game] New game state received:', state);
+    // Update moves tracking
+    currentMovesLeft = state.balance?.movesLeft || 0;
+    updateMoveButtonStates();
     applyState(state);
     showMessage(`Use arrow keys or buttons to move tiles. Moves left: ${state.balance?.movesLeft ?? '?'}`);
   } catch (err) {
@@ -1157,22 +1237,42 @@ async function doMove(direction) {
     return;
   }
 
+  // CRITICAL: Prevent invalid moves when no moves are left
+  if (currentMovesLeft <= 0) {
+    showMessage('❌ No moves left. Please deposit more tokens to continue.', 'err');
+    console.warn('[Move] Attempt to move with 0 moves left. Prevented.');
+    return;
+  }
+
   // Validate direction
   if (!['left', 'right', 'up', 'down'].includes(direction)) {
     console.error('[Move] Invalid direction:', direction);
     return;
   }
 
+  // Prevent spam clicks - only allow one move request at a time
+  if (moveRequestInFlight) {
+    console.warn('[Move] Request already in flight. Ignoring duplicate request.');
+    return;
+  }
+
+  // Set request lock
+  moveRequestInFlight = true;
+  updateMoveButtonStates();
+
   try {
     console.log(`[Move] Making move: ${direction}, userId: ${userId}`);
     const state = await fetchMove(direction);
     
-    // Server handles balance deduction
+    // Check if server rejected the move due to insufficient balance
     if (state.canPlay === false) {
       showMessage(`❌ Insufficient balance. Need 0.1 UCT per move.`, 'err');
+      console.warn('[Move] Server returned canPlay=false');
+      // Don't apply state on error to preserve game state
       return;
     }
     
+    // Only apply state if move was successful (no errors)
     applyState(state);
 
     if (state.moveBatch?.txHash) {
@@ -1196,6 +1296,14 @@ async function doMove(direction) {
         state.gameOver ? 'err' : state.won ? 'ok' : ''
       );
 
+      // Check if moves reached 0 after this move
+      if (currentMovesLeft === 0 && state.score > 0 && !scoreSubmitted) {
+        console.log('[Move] Moves reached 0 after this move. Auto-saving score...');
+        autoSubmitScore(state.score, state.board).catch(err => 
+          console.error('Auto-submit when moves=0 failed:', err)
+        );
+      }
+
       // Auto-submit after X moves
       if (moveCount >= AUTO_SUBMIT_MOVE_COUNT && !scoreSubmitted) {
         moveCount++;
@@ -1207,6 +1315,21 @@ async function doMove(direction) {
   } catch (err) {
     console.error('[Move] Error:', err);
     showMessage(`Move error: ${err.message}`, 'err');
+    // CRITICAL: Do NOT modify game state on error
+    // Fetch fresh state from server to ensure we're in sync
+    try {
+      console.log('[Move] Fetching fresh state after error to resync...');
+      const freshState = await fetchState();
+      applyState(freshState);
+      console.log('[Move] State resync complete');
+    } catch (resyncErr) {
+      console.error('[Move] Failed to resync state after error:', resyncErr);
+      showMessage('⚠️  State sync failed. Please refresh the page.', 'err');
+    }
+  } finally {
+    // Always release the request lock
+    moveRequestInFlight = false;
+    updateMoveButtonStates();
   }
 }
 
@@ -1244,9 +1367,17 @@ document.addEventListener('keydown', e => {
   };
   if (map[e.key]) {
     e.preventDefault(); // stop page scroll
-    // Only allow moves if wallet is connected and deposit is made
+    // Only allow moves if wallet is connected, has moves, and no request is pending
     if (!isConnected) {
       showMessage('❌ Please connect your wallet first!', 'err');
+      return;
+    }
+    if (currentMovesLeft <= 0) {
+      showMessage('❌ No moves left. Please deposit more tokens.', 'err');
+      return;
+    }
+    if (moveRequestInFlight) {
+      console.warn('[Keyboard] Move request already in flight, ignoring');
       return;
     }
     doMove(map[e.key]);
@@ -1257,9 +1388,17 @@ document.addEventListener('keydown', e => {
 document.querySelector('.arrow-pad').addEventListener('click', e => {
   const btn = e.target.closest('[data-dir]');
   if (btn) {
-    // Only allow moves if wallet is connected and deposit is made
+    // Only allow moves if wallet is connected, has moves, and no request is pending
     if (!isConnected) {
       showMessage('❌ Please connect your wallet first!', 'err');
+      return;
+    }
+    if (currentMovesLeft <= 0) {
+      showMessage('❌ No moves left. Please deposit more tokens.', 'err');
+      return;
+    }
+    if (moveRequestInFlight) {
+      console.warn('[Mobile] Move request already in flight, ignoring');
       return;
     }
     doMove(btn.dataset.dir);
