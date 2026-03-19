@@ -946,7 +946,6 @@ async function loadLeaderboard(forceRefresh = false) {
     }
   }
 }
-}
 
 async function openLeaderboard() {
   if (!leaderboardOverlayEl) return;
