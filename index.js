@@ -28,7 +28,10 @@ import { randomUUID, createHash } from 'crypto';
 import { GameState }    from './game.js';
 import { connectSphere, submitScore, submitMoveBatch, getSphereStatus, publishGameWallet, getServerWalletAddress, simulateDeposit, getUserDeposits } from './sphere.js';
 import * as UserBalances from './userBalances.js';
-import * as db from './db.js';
+
+// Conditional import: use Redis in production (if REDIS_URL set), SQLite locally
+const dbPath = process.env.REDIS_URL ? './db-redis.js' : './db.js';
+const db = await import(dbPath);
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
 
@@ -1076,7 +1079,9 @@ async function startup() {
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`[Server] 2048 Game Server listening on http://0.0.0.0:${PORT}`);
     console.log(`[Server] Treasury Address: ${getServerWalletAddress()}`);
-    console.log(`[Server] Database: SQLite at sphere-data/game.db`);
+    const dbType = process.env.REDIS_URL ? 'Redis' : 'SQLite';
+    const dbLocation = process.env.REDIS_URL ? 'Remote' : 'sphere-data/game.db';
+    console.log(`[Server] Database: ${dbType} at ${dbLocation}`);
     console.log(`[Server] CORS Origins: ${allowedOrigins.join(', ')}`);
     console.log(`[Server] Security: Helmet + Rate Limiting + Input Validation`);
     console.log(`[Server] Ready for deposits → Move cost: 0.1 UCT`);

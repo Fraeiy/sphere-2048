@@ -22,6 +22,7 @@
     "express-rate-limit": "^7.1.5",
     "fs": "^0.0.1-security",
     "helmet": "^7.1.0",
+    "redis": "^4.6.11",
     "sqlite3": "^5.1.6",
     "tiny-secp256k1": "^2.2.4",
     "tsx": "^4.21.0",
