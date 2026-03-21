@@ -332,6 +332,141 @@
       font-size: 0.92rem;
     }
 
+    /* ── Deposit Modal ────────────────────────────────────── */
+    .deposit-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(48, 42, 36, 0.42);
+      align-items: center;
+      justify-content: center;
+      z-index: 21;
+      padding: 16px;
+    }
+    .deposit-overlay.active { display: flex; }
+    .deposit-modal {
+      width: min(420px, 100%);
+      background: #fff7ee;
+      border-radius: 14px;
+      box-shadow: 0 22px 44px rgba(0, 0, 0, 0.24);
+      border: 1px solid #f0d7bc;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .deposit-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 14px 16px;
+      border-bottom: 1px solid #f0d7bc;
+      background: linear-gradient(180deg, #ffe9cf 0%, #fff7ee 100%);
+    }
+    .deposit-title {
+      font-size: 1.05rem;
+      font-weight: 800;
+      color: #6f6256;
+      letter-spacing: 0.01em;
+    }
+    .deposit-close {
+      border: none;
+      border-radius: 999px;
+      width: 34px;
+      height: 34px;
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #7a6d61;
+      background: #ffe6c7;
+      cursor: pointer;
+    }
+    .deposit-close:hover { background: #ffd8ad; }
+    .deposit-body {
+      padding: 18px 16px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .deposit-info {
+      font-size: 0.9rem;
+      color: #7a6d61;
+      line-height: 1.4;
+      margin: 0;
+    }
+    .deposit-info-small {
+      font-size: 0.85rem;
+      color: #8f8377;
+      margin-top: 8px;
+    }
+    .deposit-form {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .deposit-form label {
+      font-size: 0.88rem;
+      font-weight: 700;
+      color: #6f6256;
+    }
+    .deposit-input {
+      padding: 10px 12px;
+      border: 1px solid #e0c9b0;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 700;
+      color: #5b3d2a;
+      background: #fffdf9;
+    }
+    .deposit-input:focus {
+      outline: none;
+      border-color: #f47a20;
+      background: #fff;
+      box-shadow: 0 0 0 3px rgba(244, 122, 32, 0.1);
+    }
+    .deposit-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 6px;
+    }
+    .deposit-actions .btn {
+      flex: 1;
+      font-size: 0.9rem;
+    }
+    .deposit-loading {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+    }
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 3px solid #ffe6c7;
+      border-top-color: #f47a20;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .deposit-loading p {
+      font-size: 0.9rem;
+      color: #7a6d61;
+      margin: 0;
+    }
+    .deposit-error {
+      background: #fef3f0;
+      border: 1px solid #f5b89a;
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 0.85rem;
+      color: #c85a2d;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
     /* ── Mobile arrow pad ─────────────────────────────────── */
     .arrow-pad {
       display: grid;
@@ -472,6 +607,47 @@
         </div>
         <div class="leaderboard-body" id="leaderboardBody">
           <div class="leaderboard-empty">Loading leaderboard…</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Deposit Modal ────────────────────────────────────────────────── -->
+    <div class="deposit-overlay" id="depositOverlay" aria-hidden="true">
+      <div class="deposit-modal" role="dialog" aria-modal="true" aria-labelledby="depositTitle">
+        <div class="deposit-head">
+          <h2 class="deposit-title" id="depositTitle">💰 Add Funds to Play</h2>
+          <button class="deposit-close" id="btnDepositClose" aria-label="Close deposit">×</button>
+        </div>
+        <div class="deposit-body">
+          <p class="deposit-info">
+            Enter the amount of <strong>UTC</strong> to deposit.<br>
+            Min: <strong id="minDepositDisplay">1 UTC</strong> | Cost per move: <strong id="costPerMoveDisplay">0.1 UTC</strong>
+          </p>
+          <div class="deposit-form">
+            <label for="depositAmount">Amount (UTC)</label>
+            <input 
+              type="number" 
+              id="depositAmount" 
+              class="deposit-input" 
+              placeholder="10" 
+              step="0.1" 
+              min="1.1" 
+              max="999999"
+              aria-label="Deposit amount in UTC tokens"
+            />
+            <div class="deposit-info-small">
+              You will receive <strong id="movesDisplay">100</strong> 🎮 moves
+            </div>
+          </div>
+          <div class="deposit-actions">
+            <button class="btn btn-new" id="btnDepositConfirm">✓ Confirm Deposit</button>
+            <button class="btn btn-secondary" id="btnDepositCancel">✕ Cancel</button>
+          </div>
+          <div class="deposit-loading" id="depositLoading" style="display: none;">
+            <div class="spinner"></div>
+            <p>Processing deposit…</p>
+          </div>
+          <div class="deposit-error" id="depositError" style="display: none;"></div>
         </div>
       </div>
     </div>

@@ -135,34 +135,82 @@ function waitForHostReady() {
 }
 
 /**
- * Prompt the player for a deposit amount and validate it.
- * Rules:
- *   - Must be a finite number
- *   - Must be strictly greater than MIN_DEPOSIT_UTC
- * @returns {number|null} Valid amount in UCT or null when cancelled/invalid
+ * Open the deposit modal for embedded form input.
  */
-function promptDepositAmount() {
-  const input = window.prompt(
-    `Enter deposit amount in ${COIN_ID} (must be > ${MIN_DEPOSIT_UTC}):`,
-    String(DEFAULT_DEPOSIT_UTC)
-  );
-
-  if (input === null) {
-    return null;
+function openDepositModal() {
+  const overlay = document.getElementById('depositOverlay');
+  const input = document.getElementById('depositAmount');
+  const error = document.getElementById('depositError');
+  
+  if (overlay) {
+    overlay.classList.add('active');
+    if (input) {
+      input.value = String(DEFAULT_DEPOSIT_UTC);
+      input.focus();
+      updateMovesDisplay();
+    }
+    if (error) {
+      error.textContent = '';
+      error.style.display = 'none';
+    }
   }
+}
 
-  const amount = Number(input.trim());
+/**
+ * Close the deposit modal.
+ */
+function closeDepositModal() {
+  const overlay = document.getElementById('depositOverlay');
+  if (overlay) {
+    overlay.classList.remove('active');
+  }
+}
+
+/**
+ * Update the moves display based on current input value.
+ */
+function updateMovesDisplay() {
+  const input = document.getElementById('depositAmount');
+  const movesDisplay = document.getElementById('movesDisplay');
+  
+  if (!input || !movesDisplay) return;
+  
+  const amount = Number(input.value);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    movesDisplay.textContent = 'Enter an amount';
+    return;
+  }
+  
+  const moves = Math.floor(amount / MOVE_COST_UTC);
+  movesDisplay.textContent = moves > 0 ? `${moves} moves` : 'Need ≥ ' + MOVE_COST_UTC;
+}
+
+/**
+ * Validate deposit amount from modal input.
+ * @returns {number|null} Valid amount in UTC or null if invalid
+ */
+function validateDepositAmount() {
+  const input = document.getElementById('depositAmount');
+  const error = document.getElementById('depositError');
+  
+  if (!input || !error) return null;
+  
+  const amount = Number(input.value.trim());
+  
   if (!Number.isFinite(amount)) {
-    showMessage('❌ Invalid amount. Please enter a number.', 'err');
+    error.textContent = '❌ Invalid amount. Please enter a number.';
+    error.style.display = 'block';
     return null;
   }
-
+  
   if (amount <= MIN_DEPOSIT_UTC) {
     const minimumMoves = Math.floor(MIN_DEPOSIT_UTC / MOVE_COST_UTC);
-    showMessage(`❌ Deposit must be greater than ${MIN_DEPOSIT_UTC} ${COIN_ID} (more than ${minimumMoves} moves).`, 'err');
+    error.textContent = `❌ Deposit must be > ${MIN_DEPOSIT_UTC} ${COIN_ID} (${minimumMoves}+ moves)`;
+    error.style.display = 'block';
     return null;
   }
-
+  
+  error.style.display = 'none';
   return Math.round(amount * 1e8) / 1e8;
 }
 
@@ -1414,17 +1462,56 @@ if (btnDeposit) {
       showMessage('❌ Please connect your wallet first', 'err');
       return;
     }
-    const depositAmount = promptDepositAmount();
-    if (depositAmount === null) {
-      updateWalletUI();
-      return;
-    }
+    openDepositModal();
+  });
+}
 
-    btnDeposit.disabled = true;
-    btnDeposit.textContent = 'Processing...';
-    await depositToPlay(depositAmount);
-    btnDeposit.textContent = '💰 Deposit';
-    btnDeposit.disabled = false;
+// Deposit modal handlers
+const depositOverlay = document.getElementById('depositOverlay');
+const depositAmount = document.getElementById('depositAmount');
+const btnDepositConfirm = document.getElementById('btnDepositConfirm');
+const btnDepositCancel = document.getElementById('btnDepositCancel');
+const btnDepositClose = document.getElementById('btnDepositClose');
+
+// Close modal on cancel/X buttons
+if (btnDepositCancel) {
+  btnDepositCancel.addEventListener('click', closeDepositModal);
+}
+if (btnDepositClose) {
+  btnDepositClose.addEventListener('click', closeDepositModal);
+}
+
+// Close modal when clicking overlay background
+if (depositOverlay) {
+  depositOverlay.addEventListener('click', (e) => {
+    if (e.target === depositOverlay) {
+      closeDepositModal();
+    }
+  });
+}
+
+// Update moves display when input changes
+if (depositAmount) {
+  depositAmount.addEventListener('input', updateMovesDisplay);
+  depositAmount.addEventListener('change', updateMovesDisplay);
+}
+
+// Handle deposit confirmation
+if (btnDepositConfirm) {
+  btnDepositConfirm.addEventListener('click', async () => {
+    const amount = validateDepositAmount();
+    if (amount === null) {
+      return; // Validation error shown in modal
+    }
+    
+    btnDepositConfirm.disabled = true;
+    btnDepositConfirm.textContent = 'Processing...';
+    
+    closeDepositModal();
+    await depositToPlay(amount);
+    
+    btnDepositConfirm.textContent = '✓ Confirm';
+    btnDepositConfirm.disabled = false;
     updateWalletUI();
   });
 }
