@@ -383,7 +383,7 @@ async function connectWallet() {
     }
 
     // Open wallet popup using hash routing (/#/connect) as per official Sphere SDK
-    const connectUrl = WALLET_URL + '/#/connect?origin=' + encodeURIComponent(location.origin);
+    const connectUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
     popupWindow = window.open(
       connectUrl,
       'sphere-wallet',
