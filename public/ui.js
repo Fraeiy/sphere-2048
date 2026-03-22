@@ -382,8 +382,8 @@ async function connectWallet() {
       popupWindow.close();
     }
 
-    // Open wallet popup using https:// (not unicity-connect://)
-    const connectUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
+    // Open wallet popup using hash routing (/#/connect) as per official Sphere SDK
+    const connectUrl = WALLET_URL + '/#/connect?origin=' + encodeURIComponent(location.origin);
     popupWindow = window.open(
       connectUrl,
       'sphere-wallet',
