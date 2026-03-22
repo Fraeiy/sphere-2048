@@ -86,6 +86,13 @@ app.use(helmet({
   referrerPolicy: { policy: 'strict-origin-when-cross-origin' }
 }));
 
+// Keep wallet popups in the same browsing context group so Sphere can detect opener.
+app.use((req, res, next) => {
+  res.setHeader('Cross-Origin-Opener-Policy', 'unsafe-none');
+  res.removeHeader('Cross-Origin-Embedder-Policy');
+  next();
+});
+
 // CORS: Allow requests from specified origins with credentials
 app.use(cors({
   origin: (origin, callback) => {

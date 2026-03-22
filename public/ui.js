@@ -32,6 +32,7 @@ const SESSION_KEY = 'sphere2048-session';
 const DEPOSIT_KEY = 'sphere2048-deposit-paid';
 const HOST_READY_TYPE = 'sphere-connect:host-ready';
 const HOST_READY_TIMEOUT = 30000;
+const POPUP_FEATURES = 'width=420,height=650';
 
 /** @type {any} */
 let sphereClient = null;
@@ -124,7 +125,8 @@ function waitForHostReady() {
     
     function handler(event) {
       if (event.origin !== WALLET_URL) return;
-      if (event.data?.type === HOST_READY_TYPE) {
+      const type = event.data?.type;
+      if (type === HOST_READY_TYPE || type === 'host-ready') {
         clearTimeout(timeout);
         window.removeEventListener('message', handler);
         resolve();
@@ -132,6 +134,37 @@ function waitForHostReady() {
     }
     window.addEventListener('message', handler);
   });
+}
+
+/**
+ * Opens or reuses a wallet popup while preserving dApp opener context.
+ * @param {string} targetUrl
+ * @param {Window|null} existingPopup
+ * @returns {Window|null}
+ */
+function openWalletPopup(targetUrl, existingPopup = null) {
+  if (existingPopup && !existingPopup.closed) {
+    try {
+      existingPopup.location.replace(targetUrl);
+      existingPopup.focus();
+      return existingPopup;
+    } catch {
+      // If cross-origin navigation is blocked unexpectedly, fall back to a fresh popup.
+    }
+  }
+
+  const popup = window.open('about:blank', `sphere-wallet-${Date.now()}`, POPUP_FEATURES);
+  if (!popup) return null;
+
+  try {
+    popup.location.replace(targetUrl);
+    popup.focus();
+  } catch (err) {
+    console.error('[Wallet] Failed to navigate popup:', err);
+    return null;
+  }
+
+  return popup;
 }
 
 /**
@@ -299,7 +332,7 @@ async function registerPlayerWithGame(identity) {
  * Supports iframe mode, extension mode, and popup mode
  * @returns {Promise<boolean>}
  */
-async function connectWallet() {
+async function connectWallet(preOpenedPopup = null) {
   try {
     showMessage('Opening Sphere wallet…', 'warn');
 
@@ -378,16 +411,8 @@ async function connectWallet() {
 
     // Popup mode (default)
     // Close existing popup if any
-    if (popupWindow && !popupWindow.closed) {
-      popupWindow.close();
-    }
-
     const connectUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
-    popupWindow = window.open(
-      connectUrl,
-      `sphere-wallet-${Date.now()}`,
-      'width=420,height=650'
-    );
+    popupWindow = openWalletPopup(connectUrl, preOpenedPopup);
 
     if (!popupWindow) {
       showMessage('⚠️  Popup blocked. Please allow popups for ' + WALLET_URL, 'err');
@@ -647,11 +672,7 @@ async function depositToPlay(depositAmount) {
   } else {
     // Open new popup for deposit if not already open
     const depositUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
-    popupWindow = window.open(
-      depositUrl,
-      `sphere-wallet-${Date.now()}`,
-      'width=420,height=650'
-    );
+    popupWindow = openWalletPopup(depositUrl, null);
     if (!popupWindow) {
       showMessage('⚠️  Popup blocked. Please allow popups for ' + WALLET_URL, 'err');
       return false;
@@ -1449,7 +1470,12 @@ document.getElementById('btnConnectWallet').addEventListener('click', async () =
     showMessage('Already connected!', 'ok');
     return;
   }
-  await connectWallet();
+  const popupSeed = window.open('about:blank', `sphere-wallet-seed-${Date.now()}`, POPUP_FEATURES);
+  if (!popupSeed) {
+    showMessage('⚠️  Popup blocked. Please allow popups for ' + WALLET_URL, 'err');
+    return;
+  }
+  await connectWallet(popupSeed);
   updateWalletUI(); // Update UI after connection attempt
 });
 
