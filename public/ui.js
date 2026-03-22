@@ -382,12 +382,11 @@ async function connectWallet() {
       popupWindow.close();
     }
 
-    // Open wallet popup using hash routing (/#/connect) as per official Sphere SDK
+    // Open wallet popup using https:// (not unicity-connect://)
     const connectUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
     popupWindow = window.open(
       connectUrl,
-      'sphere-wallet',
-      'width=420,height=650'
+      'sphere-wallet'
     );
 
     if (!popupWindow) {
@@ -650,8 +649,7 @@ async function depositToPlay(depositAmount) {
     const depositUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
     popupWindow = window.open(
       depositUrl,
-      'sphere-wallet',
-      'width=420,height=650'
+      'sphere-wallet'
     );
     if (!popupWindow) {
       showMessage('⚠️  Popup blocked. Please allow popups for ' + WALLET_URL, 'err');
