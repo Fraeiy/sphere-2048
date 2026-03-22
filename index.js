@@ -69,6 +69,10 @@ process.on('uncaughtException', (error) => {
 
 // Helmet: Set various HTTP headers for security
 app.use(helmet({
+  // Sphere wallet popup flow requires opener relationship to remain intact.
+  // COOP/COEP defaults can isolate browsing context and break popup detection.
+  crossOriginOpenerPolicy: false,
+  crossOriginEmbedderPolicy: false,
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],

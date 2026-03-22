@@ -385,7 +385,7 @@ async function connectWallet() {
     const connectUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
     popupWindow = window.open(
       connectUrl,
-      'sphere-wallet',
+      `sphere-wallet-${Date.now()}`,
       'width=420,height=650'
     );
 
@@ -649,7 +649,7 @@ async function depositToPlay(depositAmount) {
     const depositUrl = WALLET_URL + '/connect?origin=' + encodeURIComponent(location.origin);
     popupWindow = window.open(
       depositUrl,
-      'sphere-wallet',
+      `sphere-wallet-${Date.now()}`,
       'width=420,height=650'
     );
     if (!popupWindow) {
