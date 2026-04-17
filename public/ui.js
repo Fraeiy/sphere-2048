@@ -1027,7 +1027,6 @@ async function openLeaderboard() {
   // Always refresh when opening to show latest scores
   await loadLeaderboard(true);
   leaderboardOverlayEl.setAttribute('aria-hidden', 'false');
-  await loadLeaderboard(false);
 }
 
 function closeLeaderboard() {

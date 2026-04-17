@@ -581,12 +581,13 @@ app.post('/api/verify-deposit', limiters.deposits, async (req, res) => {
 
     // Add deposit to user balance in both systems
     const amountAtomic = Math.round(uct * 1e18);
+    const moveCredits = Math.max(0, Math.floor(uct * 10));
     
     // Update in-memory balance
     const userInMem = UserBalances.addDeposit(userId, amountAtomic);
     
     // Store to persistent database with transaction hash
-    const userDb = await db.addDeposit(userId, amountAtomic, txHash || tx.hash);
+    const userDb = await db.addDeposit(userId, amountAtomic, txHash || tx.hash, moveCredits);
 
     // Log audit trail
     console.log(`[Deposit] Processed: userId=${userId}, amount=${uct}UCT, tx=${txHash || tx.hash}`);
@@ -650,10 +651,11 @@ app.post('/api/test-deposit', async (req, res) => {
 
     // Add deposit directly without blockchain verification
     const amountAtomic = Math.round(uct * 1e18);
+    const moveCredits = Math.max(0, Math.floor(uct * 10));
     const user = UserBalances.addDeposit(userId, amountAtomic);
 
     // CRITICAL: Persist to database to ensure consistency
-    await db.addDeposit(userId, amountAtomic, `test-deposit-${Date.now()}`);
+    await db.addDeposit(userId, amountAtomic, `test-deposit-${Date.now()}`, moveCredits);
 
     console.log(`[TestDeposit] Credited ${uct} UCT to ${userId}`);
 
@@ -714,14 +716,17 @@ app.get('/api/state', async (req, res) => {
     
     // Use database balance as source of truth
     const currentUser = dbUser || inMemUser;
+    const resolvedMovesLeft = currentUser
+      ? (currentUser.moves_left ?? currentUser.movesLeft ?? 0)
+      : 0;
 
     res.json({ 
       userId,
-      canPlay: currentUser ? UserBalances.canMove(userId) : false,
+      canPlay: resolvedMovesLeft > 0,
       lastBatchTxHash: session?.lastBatchTxHash || null,
       balance: currentUser ? {
         current: UserBalances.formatBalance(currentUser.balance),
-        movesLeft: currentUser.moves_left || currentUser.movesLeft,
+        movesLeft: resolvedMovesLeft,
         source: 'database'
       } : null,
       ...state.toJSON() 
@@ -858,8 +863,18 @@ app.post('/api/move', async (req, res) => {
       await db.deductMove(userId);
     } catch (dbErr) {
       console.error(`[Server] Failed to update database for move deduction: ${userId}`, dbErr);
-      // Log the error but don't fail the request - in-memory is source of truth
-      // Database will be synced on next state fetch
+      // Keep state consistent: revert in-memory deduction when DB write fails.
+      const fallbackUser = UserBalances.getBalance(userId);
+      if (fallbackUser) {
+        fallbackUser.movesLeft += 1;
+        fallbackUser.totalMoves = Math.max(0, (fallbackUser.totalMoves || 0) - 1);
+      }
+      return res.status(503).json({
+        success: false,
+        error: 'MOVE_PERSISTENCE_ERROR',
+        errorMessage: 'Temporary sync issue. Please retry your move.',
+        canPlay: true
+      });
     }
 
     // Apply move to game

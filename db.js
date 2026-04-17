@@ -216,14 +216,17 @@ export async function getOrCreateUser(userId, walletId = null) {
  * @param {string} txHash - Transaction hash
  * @returns {Promise<object>} Updated user record
  */
-export async function addDeposit(userId, amount, txHash = null) {
+export async function addDeposit(userId, amount, txHash = null, moveCredits = null) {
   const user = await getOrCreateUser(userId);
   const now = Date.now();
   const MOVE_COST_ATOMIC = 100000000000000000; // 0.1 UCT in atomic units (18 decimals)
 
   // Update user balance
   const newBalance = user.balance + amount;
-  const newMovesLeft = user.moves_left + Math.floor(amount / MOVE_COST_ATOMIC); // 0.1 UCT per move
+  const creditedMoves = Number.isInteger(moveCredits)
+    ? Math.max(0, moveCredits)
+    : Math.floor(amount / MOVE_COST_ATOMIC);
+  const newMovesLeft = user.moves_left + creditedMoves; // 0.1 UCT per move
 
   await run(
     `UPDATE users 
@@ -239,7 +242,7 @@ export async function addDeposit(userId, amount, txHash = null) {
     [userId, user.wallet_id, amount, txHash, now, now]
   );
 
-  console.log(`[DB] Deposit: ${userId} +${amount} (${newMovesLeft} moves)`);
+  console.log(`[DB] Deposit: ${userId} +${amount} (+${creditedMoves} moves, total ${newMovesLeft})`);
 
   return getOrCreateUser(userId);
 }
@@ -251,7 +254,6 @@ export async function addDeposit(userId, amount, txHash = null) {
  */
 export async function deductMove(userId) {
   const user = await getOrCreateUser(userId);
-  const MOVE_COST_ATOMIC = Math.round(0.1 * 1e18); // 0.1 UCT
 
   if (user.moves_left <= 0) {
     return false;
@@ -347,7 +349,9 @@ export async function getLeaderboard(limit = 10) {
        COUNT(scores.id) as game_count,
        AVG(scores.score) as avg_score
      FROM users
+     LEFT JOIN scores ON users.user_id = scores.user_id
      WHERE users.high_score > 0
+     GROUP BY users.user_id, users.wallet_id, users.high_score, users.total_moves, users.total_deposited
      ORDER BY users.high_score DESC, users.total_moves DESC
      LIMIT ?`,
     [limit]
