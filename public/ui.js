@@ -968,19 +968,24 @@ function shortWalletId(value) {
 function renderLeaderboardRows(entries) {
   if (!leaderboardBodyEl) return;
 
-  // Optimized: Use innerHTML for batch rendering (much faster than DOM manipulation)
-  let html = '<div class="leaderboard-row header"><div>Rank</div><div>Player</div><div style="text-align:right;">High Score</div><div style="text-align:right;">Moves</div></div>';
+  // Header with column info
+  let html = '<div class="leaderboard-row header"><div>Rank</div><div>Player</div><div style="text-align:right;">High Score</div><div style="text-align:right;">Moves</div><div style="text-align:right;">Games</div></div>';
 
   if (!entries.length) {
-    html += '<div class="leaderboard-empty">No players on the board yet. Play a few rounds to populate it.</div>';
+    html += '<div class="leaderboard-empty">🎮 No games played yet. Start playing to appear on the leaderboard!</div>';
     leaderboardBodyEl.innerHTML = html;
     return;
   }
 
-  // Build all HTML at once
+  // Build all HTML at once with rank badges for top 3
   for (const item of entries) {
     const playerName = shortWalletId(item.walletId);
-    html += `<div class="leaderboard-row"><div class="leaderboard-rank">#${item.rank}</div><div class="leaderboard-player" title="${item.walletId}">${playerName}</div><div class="leaderboard-score">${item.highScore ?? 0}</div><div class="leaderboard-moves">${item.totalMoves ?? 0}</div></div>`;
+    let rankBadge = `#${item.rank}`;
+    if (item.rank === 1) rankBadge = '🥇';
+    else if (item.rank === 2) rankBadge = '🥈';
+    else if (item.rank === 3) rankBadge = '🥉';
+    
+    html += `<div class="leaderboard-row" data-rank="${item.rank}"><div class="leaderboard-rank">${rankBadge}</div><div class="leaderboard-player" title="${item.walletId}">${playerName}</div><div class="leaderboard-score">${item.highScore ?? 0}</div><div class="leaderboard-moves">${item.totalMoves ?? 0}</div><div style="text-align:right;">${item.gameCount ?? 0}</div></div>`;
   }
 
   leaderboardBodyEl.innerHTML = html;
@@ -998,7 +1003,7 @@ async function loadLeaderboard(forceRefresh = false) {
   }
 
   if (leaderboardBodyEl) {
-    leaderboardBodyEl.innerHTML = '<div class="leaderboard-empty">Refreshing leaderboard…</div>';
+    leaderboardBodyEl.innerHTML = '<div class="leaderboard-empty">⏳ Loading leaderboard…</div>';
   }
 
   try {
@@ -1006,11 +1011,12 @@ async function loadLeaderboard(forceRefresh = false) {
     const entries = Array.isArray(result?.leaderboard) ? result.leaderboard : [];
     leaderboardCache.entries = entries;
     leaderboardCache.fetchedAt = Date.now();
+    console.log('[Leaderboard] Loaded', entries.length, 'players');
     renderLeaderboardRows(entries);
   } catch (err) {
     console.error('[Leaderboard] Load error:', err);
     if (leaderboardBodyEl) {
-      leaderboardBodyEl.innerHTML = '<div class="leaderboard-empty">Failed to load leaderboard</div>';
+      leaderboardBodyEl.innerHTML = '<div class="leaderboard-empty">❌ Failed to load leaderboard. Please try again.</div>';
     }
   }
 }
@@ -1018,6 +1024,8 @@ async function loadLeaderboard(forceRefresh = false) {
 async function openLeaderboard() {
   if (!leaderboardOverlayEl) return;
   leaderboardOverlayEl.classList.add('active');
+  // Always refresh when opening to show latest scores
+  await loadLeaderboard(true);
   leaderboardOverlayEl.setAttribute('aria-hidden', 'false');
   await loadLeaderboard(false);
 }
@@ -1402,6 +1410,8 @@ async function autoSubmitScore(score, board) {
     if (result.success) {
       scoreSubmitted = true;
       showMessage(`✅ Score ${score} auto-submitted! Event ID: ${result.eventId}`, 'ok');
+      // Refresh leaderboard after successful submission
+      setTimeout(() => loadLeaderboard(true).catch(err => console.error('[Leaderboard] Refresh failed:', err)), 1000);
     } else {
       showMessage(`⚠️  Auto-submit failed: ${result.error}. Will retry later.`, 'warn');
     }

@@ -219,10 +219,11 @@ export async function getOrCreateUser(userId, walletId = null) {
 export async function addDeposit(userId, amount, txHash = null) {
   const user = await getOrCreateUser(userId);
   const now = Date.now();
+  const MOVE_COST_ATOMIC = 100000000000000000; // 0.1 UCT in atomic units (18 decimals)
 
   // Update user balance
   const newBalance = user.balance + amount;
-  const newMovesLeft = user.moves_left + Math.floor(amount / (0.1 * 1e18)); // 0.1 UCT per move
+  const newMovesLeft = user.moves_left + Math.floor(amount / MOVE_COST_ATOMIC); // 0.1 UCT per move
 
   await run(
     `UPDATE users 
@@ -342,10 +343,11 @@ export async function getLeaderboard(limit = 10) {
        users.wallet_id,
        users.high_score,
        users.total_moves,
+       users.total_deposited,
        COUNT(scores.id) as game_count,
        AVG(scores.score) as avg_score
      FROM users
-     LEFT JOIN scores ON users.user_id = scores.user_id
+     WHERE users.high_score > 0
      ORDER BY users.high_score DESC, users.total_moves DESC
      LIMIT ?`,
     [limit]
@@ -353,11 +355,13 @@ export async function getLeaderboard(limit = 10) {
 
   return leaderboard.map((row, index) => ({
     rank: index + 1,
-    wallet_id: row.wallet_id || row.user_id,
-    high_score: row.high_score,
-    total_moves: row.total_moves,
-    game_count: row.game_count || 0,
-    avg_score: row.avg_score ? Math.round(row.avg_score) : 0
+    userId: row.user_id,
+    walletId: row.wallet_id || row.user_id,
+    highScore: row.high_score,
+    totalMoves: row.total_moves,
+    totalDeposited: row.total_deposited,
+    gameCount: row.game_count || 0,
+    avgScore: row.avg_score ? Math.round(row.avg_score) : 0
   }));
 }
 

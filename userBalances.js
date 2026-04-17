@@ -17,9 +17,9 @@
  */
 
 const MOVE_COST_UCT = 0.1; // Effective cost per move (0.1 UCT)
-const MOVE_COST_ATOMIC = Math.round(MOVE_COST_UCT * 1e18); // 0.1 UCT in atomic units
+const MOVE_COST_ATOMIC = 100000000000000000; // 0.1 UCT in atomic units (18 decimals) - explicit constant to avoid floating point errors
 const BILLING_CHUNK_MOVES = 10; // Charge once every 10 moves
-const BILLING_CHUNK_ATOMIC = Math.round(BILLING_CHUNK_MOVES * MOVE_COST_ATOMIC); // 1 UCT in atomic units
+const BILLING_CHUNK_ATOMIC = MOVE_COST_ATOMIC * BILLING_CHUNK_MOVES; // 1 UCT in atomic units
 
 /**
  * In-memory user balance store
