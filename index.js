@@ -626,7 +626,7 @@ app.post('/api/verify-deposit', limiters.deposits, async (req, res) => {
  * Response:
  *   { success: boolean, balance?: object }
  */
-app.post('/api/test-deposit', (req, res) => {
+app.post('/api/test-deposit', async (req, res) => {
   const { userId, uct } = req.body;
 
   if (!userId || uct === undefined) {
@@ -645,11 +645,15 @@ app.post('/api/test-deposit', (req, res) => {
 
   try {
     // Ensure user exists
+    await db.getOrCreateUser(userId, userId);
     UserBalances.initializeUser(userId, userId);
 
     // Add deposit directly without blockchain verification
     const amountAtomic = Math.round(uct * 1e18);
     const user = UserBalances.addDeposit(userId, amountAtomic);
+
+    // CRITICAL: Persist to database to ensure consistency
+    await db.addDeposit(userId, amountAtomic, `test-deposit-${Date.now()}`);
 
     console.log(`[TestDeposit] Credited ${uct} UCT to ${userId}`);
 
@@ -847,6 +851,15 @@ app.post('/api/move', async (req, res) => {
         errorMessage: 'Failed to deduct move cost',
         canPlay: false
       });
+    }
+
+    // CRITICAL: Also update database to keep it in sync with in-memory state
+    try {
+      await db.deductMove(userId);
+    } catch (dbErr) {
+      console.error(`[Server] Failed to update database for move deduction: ${userId}`, dbErr);
+      // Log the error but don't fail the request - in-memory is source of truth
+      // Database will be synced on next state fetch
     }
 
     // Apply move to game

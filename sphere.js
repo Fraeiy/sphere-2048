@@ -2,11 +2,11 @@
  * sphere.js — Game Treasury & Deposit Address Management
  *
  * Handles:
- *   1. Game treasury address where players deposit UTC before playing
+ *   1. Game treasury address where players deposit UCT before playing
  *   2. Score tracking and game state (optional blockchain submission)
  *
  * The game wallet (sphere2048) is where players send deposits via the Sphere wallet UI.
- * Players use their own wallets to send UTC to the game treasury address.
+ * Players use their own wallets to send UCT to the game treasury address.
  *
  * Configuration via env vars:
  *   GAME_TREASURY_ADDRESS   L1 address for deposits (e.g., alpha1qq8...)

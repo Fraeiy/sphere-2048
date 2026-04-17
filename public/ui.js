@@ -3,13 +3,13 @@
  *
  * Responsibilities:
  *   • Connect to Sphere wallet via ConnectClient + PostMessageTransport
- *   • Check UTC token balance before allowing play
- *   • Handle deposits: send UTC tokens to game treasury
+ *   • Check UCT token balance before allowing play
+ *   • Handle deposits: send UCT tokens to game treasury
  *   • Manages a stable sessionId (stored in sessionStorage)
  *   • Fetches game state from Express API after each action
  *   • Renders the 4×4 board into the DOM
  *   • Handles keyboard (arrow keys) and on-screen button input
- *   • Charges UTC per move or in batches
+ *   • Charges UCT per move or in batches
  *   • Submits final score to blockchain via /api/submit-score
  *   • Polls Sphere SDK status and shows it in status pill
  */
@@ -22,9 +22,9 @@ const WALLET_URL = 'https://sphere.unicity.network';
 let userId = null; // User ID for game state tracking
 let GAME_HANDLE = null; // Player's game wallet display (e.g., "fraey_2048")
 let DEPOSIT_ADDRESS = null; // Actual server wallet address to send deposits to
-const MOVE_COST_UTC = 0.1; // Cost per move in UCT
-const MIN_DEPOSIT_UTC = 1; // Deposit must be strictly greater than this amount
-const DEFAULT_DEPOSIT_UTC = 10;
+const MOVE_COST_UCT = 0.1; // Cost per move in UCT
+const MIN_DEPOSIT_UCT = 1; // Deposit must be strictly greater than this amount
+const DEFAULT_DEPOSIT_UCT = 10;
 const COIN_ID = 'UCT';
 const UCT_COIN_ID_HEX = '455ad8720656b08e8dbd5bac1f3c73eeea5431565f6c1c3af742b1aa12d41d89';
 const UCT_DECIMALS = 18;
@@ -45,7 +45,7 @@ let uctDecimals = UCT_DECIMALS;
 let walletIdentity = null;
 
 /** @type {number} */
-let utcBalance = 0; // Wallet balance
+let uctBalance = 0; // Wallet balance
 
 /** @type {number} */
 let gameDepositBalance = 0; // In-game deposit balance (deducted per move)
@@ -178,7 +178,7 @@ function openDepositModal() {
   if (overlay) {
     overlay.classList.add('active');
     if (input) {
-      input.value = String(DEFAULT_DEPOSIT_UTC);
+      input.value = String(DEFAULT_DEPOSIT_UCT);
       input.focus();
       updateMovesDisplay();
     }
@@ -214,13 +214,13 @@ function updateMovesDisplay() {
     return;
   }
   
-  const moves = Math.floor(amount / MOVE_COST_UTC);
-  movesDisplay.textContent = moves > 0 ? `${moves} moves` : 'Need ≥ ' + MOVE_COST_UTC;
+  const moves = Math.floor(amount / MOVE_COST_UCT);
+  movesDisplay.textContent = moves > 0 ? `${moves} moves` : 'Need ≥ ' + MOVE_COST_UCT;
 }
 
 /**
  * Validate deposit amount from modal input.
- * @returns {number|null} Valid amount in UTC or null if invalid
+ * @returns {number|null} Valid amount in UCT or null if invalid
  */
 function validateDepositAmount() {
   const input = document.getElementById('depositAmount');
@@ -236,9 +236,9 @@ function validateDepositAmount() {
     return null;
   }
   
-  if (amount <= MIN_DEPOSIT_UTC) {
-    const minimumMoves = Math.floor(MIN_DEPOSIT_UTC / MOVE_COST_UTC);
-    error.textContent = `❌ Deposit must be > ${MIN_DEPOSIT_UTC} ${COIN_ID} (${minimumMoves}+ moves)`;
+  if (amount <= MIN_DEPOSIT_UCT) {
+    const minimumMoves = Math.floor(MIN_DEPOSIT_UCT / MOVE_COST_UCT);
+    error.textContent = `❌ Deposit must be > ${MIN_DEPOSIT_UCT} ${COIN_ID} (${minimumMoves}+ moves)`;
     error.style.display = 'block';
     return null;
   }
@@ -529,13 +529,13 @@ async function connectWallet(preOpenedPopup = null) {
 }
 
 /**
- * Checks UTC balance from the wallet (based on Boxy-Run implementation).
+ * Checks UCT balance from the wallet (based on Boxy-Run implementation).
  * Works in iframe, extension, and popup modes.
  * @returns {Promise<void>}
  */
 async function checkBalance() {
   if (!isConnected) {
-    utcBalance = 0;
+    uctBalance = 0;
     updateBalanceDisplay();
     return;
   }
@@ -548,7 +548,7 @@ async function checkBalance() {
       const timeout = setTimeout(() => {
         window.removeEventListener('message', handleMessage);
         console.error('Balance query timeout');
-        utcBalance = null;
+        uctBalance = null;
         updateBalanceDisplay();
         resolve();
       }, 30000);
@@ -564,21 +564,21 @@ async function checkBalance() {
 
             if (msg.error) {
               console.error('Balance query failed:', msg.error);
-              utcBalance = null;
+              uctBalance = null;
             } else if (Array.isArray(msg.result)) {
               // Find UCT in assets array
               const uct = msg.result.find(a => a.symbol === COIN_ID);
               if (uct) {
                 uctCoinId = uct.coinId;
                 uctDecimals = uct.decimals || UCT_DECIMALS;
-                utcBalance = Number(uct.totalAmount) / Math.pow(10, uctDecimals);
+                uctBalance = Number(uct.totalAmount) / Math.pow(10, uctDecimals);
               } else {
                 uctCoinId = UCT_COIN_ID_HEX;
                 uctDecimals = UCT_DECIMALS;
-                utcBalance = 0;
+                uctBalance = 0;
               }
             } else {
-              utcBalance = 0;
+              uctBalance = 0;
             }
             updateBalanceDisplay();
             resolve();
@@ -598,7 +598,7 @@ async function checkBalance() {
         console.error('No valid target window for balance query');
         clearTimeout(timeout);
         window.removeEventListener('message', handleMessage);
-        utcBalance = null;
+        uctBalance = null;
         updateBalanceDisplay();
         resolve();
         return;
@@ -616,13 +616,13 @@ async function checkBalance() {
     });
   } catch (err) {
     console.error('Balance check failed:', err);
-    utcBalance = null;
+    uctBalance = null;
     updateBalanceDisplay();
   }
 }
 
 /**
- * Deposits UTC tokens to play the game (based on Boxy-Run implementation).
+ * Deposits UCT tokens to play the game (based on Boxy-Run implementation).
  * Uses Sphere Connect intent protocol.
  * @returns {Promise<boolean>}
  */
@@ -652,13 +652,13 @@ async function depositToPlay(depositAmount) {
     return false;
   }
 
-  if (depositAmount <= MIN_DEPOSIT_UTC) {
-    const minimumMoves = Math.floor(MIN_DEPOSIT_UTC / MOVE_COST_UTC);
-    showMessage(`❌ Deposit must be greater than ${MIN_DEPOSIT_UTC} ${COIN_ID} (more than ${minimumMoves} moves).`, 'err');
+  if (depositAmount <= MIN_DEPOSIT_UCT) {
+    const minimumMoves = Math.floor(MIN_DEPOSIT_UCT / MOVE_COST_UCT);
+    showMessage(`❌ Deposit must be greater than ${MIN_DEPOSIT_UCT} ${COIN_ID} (more than ${minimumMoves} moves).`, 'err');
     return false;
   }
 
-  if (utcBalance !== null && utcBalance < depositAmount) {
+  if (uctBalance !== null && uctBalance < depositAmount) {
     showMessage(`❌ Insufficient wallet balance. You need at least ${depositAmount} ${COIN_ID} in your wallet.`, 'err');
     return false;
   }
@@ -689,7 +689,7 @@ async function depositToPlay(depositAmount) {
   }
 
   try {
-    const creditedMoves = Math.floor(depositAmount / MOVE_COST_UTC);
+    const creditedMoves = Math.floor(depositAmount / MOVE_COST_UCT);
     showMessage(`Opening wallet to deposit ${depositAmount} ${COIN_ID} (${creditedMoves} moves)… Please sign the transaction.`, 'warn');
 
     if (!uctCoinId) {
@@ -748,7 +748,7 @@ async function depositToPlay(depositAmount) {
                     }
                     moveCount = 0; // Reset move count on new deposit
                     updateMoveButtonStates(); // Re-enable move buttons
-                    showMessage(`✅ Deposited ${depositAmount} ${COIN_ID}! In-game balance: ${gameDepositBalance.toFixed(2)} UTC. Moves available: ${currentMovesLeft}`, 'ok');
+                    showMessage(`✅ Deposited ${depositAmount} ${COIN_ID}! In-game balance: ${gameDepositBalance.toFixed(2)} UCT. Moves available: ${currentMovesLeft}`, 'ok');
                     sessionStorage.setItem(DEPOSIT_KEY, 'true');
                     updateBalanceDisplay();
                     checkBalance().catch(err => console.error('Balance check failed:', err));
@@ -797,14 +797,14 @@ async function chargeMoveToWallet() {
   if (!isConnected) return false;
   
   // Check in-game deposit balance, not wallet balance
-  if (gameDepositBalance < MOVE_COST_UTC) {
-    showMessage(`❌ Insufficient in-game balance. Need ${MOVE_COST_UTC} UTC, have ${gameDepositBalance}. Please deposit more.`, 'err');
+  if (gameDepositBalance < MOVE_COST_UCT) {
+    showMessage(`❌ Insufficient in-game balance. Need ${MOVE_COST_UCT} UCT, have ${gameDepositBalance}. Please deposit more.`, 'err');
     return false;
   }
 
   try {
     // Deduct from in-game deposit balance
-    gameDepositBalance -= MOVE_COST_UTC;
+    gameDepositBalance -= MOVE_COST_UCT;
     moveCount++;
     updateBalanceDisplay();
     return true;
@@ -819,10 +819,10 @@ function updateBalanceDisplay() {
   const balanceEl = document.getElementById('walletBalance');
   const depositEl = document.getElementById('gameDeposit');
   if (balanceEl) {
-    balanceEl.textContent = `${utcBalance !== null ? utcBalance.toFixed(2) : '0.00'} UTC`;
+    balanceEl.textContent = `${uctBalance !== null ? uctBalance.toFixed(2) : '0.00'} UCT`;
   }
   if (depositEl) {
-    depositEl.textContent = `${gameDepositBalance.toFixed(2)} UTC`;
+    depositEl.textContent = `${gameDepositBalance.toFixed(2)} UCT`;
   }
 }
 
@@ -1587,7 +1587,7 @@ document.addEventListener('keydown', (event) => {
     
     // Show message that wallet connection is required
     if (!isConnected) {
-      showMessage('⚠️  Please connect your wallet and deposit UTC tokens to start playing.', 'warn');
+      showMessage('⚠️  Please connect your wallet and deposit UCT tokens to start playing.', 'warn');
     } else {
       showMessage('Use arrow keys or buttons to move tiles.');
     }

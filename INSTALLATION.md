@@ -97,7 +97,7 @@ The frontend (`public/ui.js`) already has:
    - Returns updated balance
 
 4. **Frontend Updates UI**
-   - Shows new balance: "In-Game Balance: 100 UTC"
+   - Shows new balance: "In-Game Balance: 100 UCT"
    - Enables move buttons
 
 ---

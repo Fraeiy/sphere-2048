@@ -49,7 +49,7 @@ New function:
    ↓
 8. Player clicks "Deposit"
    ↓
-9. Sends UTC to GAME_DEPOSIT_ADDRESS (@a1b2c3_2048_xyz)
+9. Sends UCT to GAME_DEPOSIT_ADDRESS (@a1b2c3_2048_xyz)
    ↓
 10. Deposit successful!
    ↓
@@ -61,7 +61,7 @@ New function:
 ### Deposit Button
 - Disabled until `walletReady = true`
 - Text shows: "⏳ Initializing wallet…" during setup
-- Text shows: "💰 Deposit (100 UTC)" when ready
+- Text shows: "💰 Deposit (100 UCT)" when ready
 
 ### Wallet Creation
 - Prevents users from depositing before identity is published

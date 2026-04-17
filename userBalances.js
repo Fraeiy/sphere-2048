@@ -5,7 +5,7 @@
  * {
  *   userId: {
  *     walletId: string,              // wallet address or nametag
- *     balance: number,               // current UTC balance (in smallest units)
+ *     balance: number,               // current UCT balance (in smallest units)
  *     totalDeposited: number,        // lifetime deposits
  *     movesLeft: number,             // current moves available
  *     totalMoves: number,            // lifetime moves
@@ -16,8 +16,8 @@
  * }
  */
 
-const MOVE_COST_UTC = 0.1; // Effective cost per move (0.1 UCT)
-const MOVE_COST_ATOMIC = Math.round(MOVE_COST_UTC * 1e18); // 0.1 UCT in atomic units
+const MOVE_COST_UCT = 0.1; // Effective cost per move (0.1 UCT)
+const MOVE_COST_ATOMIC = Math.round(MOVE_COST_UCT * 1e18); // 0.1 UCT in atomic units
 const BILLING_CHUNK_MOVES = 10; // Charge once every 10 moves
 const BILLING_CHUNK_ATOMIC = Math.round(BILLING_CHUNK_MOVES * MOVE_COST_ATOMIC); // 1 UCT in atomic units
 
