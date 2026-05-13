@@ -501,8 +501,8 @@ app.post('/api/register', async (req, res) => {
  * GET /api/balance
  * Returns user balance and moves left from PERSISTENT DATABASE.
  *
- * IMPORTANT: Reads from SQLite database, not in-memory!
- * This ensures balances are accurate even after server restart.
+ * IMPORTANT: Reads ONLY from database, calculates moves on-the-fly from balance!
+ * No in-memory cache - always accurate.
  *
  * Query params:
  *   userId - User identifier
@@ -528,13 +528,13 @@ app.get('/api/balance', async (req, res) => {
     
     if (!dbUser) {
       console.log(`[Balance] User ${userId} not found in database`);
-      // Not found in DB either - return 0 balance
+      // Not found in DB - return 0 balance
       return res.json({ 
         success: true,
         userId,
         balance: {
-          current: '0',
-          totalDeposited: '0',
+          current: '0.00',
+          totalDeposited: '0.00',
           movesLeft: 0,
           totalMoves: 0,
           highScore: 0
@@ -542,21 +542,23 @@ app.get('/api/balance', async (req, res) => {
       });
     }
 
-    // Sync from DB to in-memory
-    const user = UserBalances.syncFromDatabase(userId, dbUser);
-    const moves = UserBalances.calculateMoves(user.balanceCents);
+    // Calculate moves directly from atomic balance (no conversion errors)
+    const balanceAtomic = dbUser.balance || 0;
+    const moves = UserBalances.calculateMovesFromAtomic(balanceAtomic);
+    const uct = UserBalances.atomicToUCT(balanceAtomic);
+    const depositedUct = UserBalances.atomicToUCT(dbUser.total_deposited || 0);
     
-    console.log(`[Balance] User ${userId}: ${UserBalances.centsToUCT(user.balanceCents)} UCT, ${moves} moves, high_score=${user.highScore}`);
+    console.log(`[Balance] User ${userId}: ${uct} UCT (${balanceAtomic} atomic), ${moves} moves`);
 
     res.json({ 
       success: true,
       userId,
       balance: {
-        current: UserBalances.centsToUCT(user.balanceCents),
-        totalDeposited: UserBalances.centsToUCT(user.totalDepositedCents),
+        current: uct,
+        totalDeposited: depositedUct,
         movesLeft: moves,
-        totalMoves: user.totalMovesMade,
-        highScore: user.highScore
+        totalMoves: dbUser.total_moves || 0,
+        highScore: dbUser.high_score || 0
       },
       source: 'database',
       timestamp: Date.now()
@@ -600,8 +602,7 @@ app.post('/api/verify-deposit', limiters.deposits, async (req, res) => {
   }
 
   try {
-    // Ensure user exists in both systems
-    UserBalances.initializeUser(userId, userId);
+    // Ensure user exists in database
     await db.getOrCreateUser(userId, userId);
 
     // Record the deposit (for blockchain verification)
@@ -614,18 +615,16 @@ app.post('/api/verify-deposit', limiters.deposits, async (req, res) => {
       });
     }
 
-    // Add deposit to user balance
+    // Add deposit to user balance in DB (source of truth!)
     const amountAtomic = Math.round(uct * 1e18);
-    const moveCredits = Math.max(0, Math.floor(uct * 10));
-    
-    // Update in-memory first
-    const userInMem = UserBalances.addDepositAtomic(userId, amountAtomic);
-    
-    // Persist to database
-    const userDb = await db.addDeposit(userId, amountAtomic, txHash || tx.hash, moveCredits);
+    await db.addDeposit(userId, amountAtomic, txHash || tx.hash);
 
-    // Log audit trail
-    const moves = UserBalances.calculateMoves(userInMem.balanceCents);
+    // READ BACK from database to ensure accurate response
+    const updatedUser = await db.getUserStats(userId);
+    const moves = UserBalances.calculateMovesFromAtomic(updatedUser.balance || 0);
+    const uctDisplay = UserBalances.atomicToUCT(updatedUser.balance || 0);
+    const totalDepositedDisplay = UserBalances.atomicToUCT(updatedUser.total_deposited || 0);
+
     console.log(`[Deposit] Processed: userId=${userId}, +${uct} UCT, tx=${txHash || tx.hash}, moves=${moves}`);
 
     res.json({ 
@@ -638,8 +637,8 @@ app.post('/api/verify-deposit', limiters.deposits, async (req, res) => {
         verified: true
       },
       balance: {
-        current: UserBalances.centsToUCT(userInMem.balanceCents),
-        totalDeposited: UserBalances.centsToUCT(userInMem.totalDepositedCents),
+        current: uctDisplay,
+        totalDeposited: totalDepositedDisplay,
         movesLeft: moves
       }
     });
@@ -851,36 +850,39 @@ app.post('/api/move', limiters.moves, async (req, res) => {
 
   try {
     // ATOMIC TRANSACTION: All-or-nothing move processing
-    // 1. Check balance
-    if (!UserBalances.canMove(userId)) {
-      const user = UserBalances.getBalance(userId);
-      return res.status(402).json({ 
-        success: false,
-        error: 'NO_MOVES',
-        errorMessage: 'Insufficient moves. Please deposit more tokens to continue.',
-        canPlay: false
-      });
-    }
-
-    // 2. Pre-validate: Ensure DB is accessible before proceeding
+    // 1. Check balance from DATABASE (source of truth!)
     const preCheckDb = await db.getUserStats(userId);
-    if (!preCheckDb || preCheckDb.balance < 100000000000000000) { // < 0.1 UCT
-      return res.status(402).json({ 
+    if (!preCheckDb) {
+      return res.status(400).json({ 
         success: false,
-        error: 'NO_MOVES',
-        errorMessage: 'No moves available',
-        canPlay: false
+        error: 'USER_NOT_FOUND',
+        errorMessage: 'User not found'
       });
     }
 
-    // 3. CRITICAL: Update DB FIRST (DB is source of truth)
+    // Calculate moves directly from DB balance
+    const movesAvailable = UserBalances.calculateMovesFromAtomic(preCheckDb.balance || 0);
+    if (movesAvailable <= 0) {
+      return res.status(402).json({ 
+        success: false,
+        error: 'NO_MOVES',
+        errorMessage: 'No moves available. Please deposit more tokens.',
+        canPlay: false,
+        balance: {
+          current: UserBalances.atomicToUCT(preCheckDb.balance || 0),
+          movesLeft: movesAvailable
+        }
+      });
+    }
+
+    // 2. CRITICAL: Update DB FIRST (DB is source of truth)
     let dbMoveResult;
     try {
-      // Pass direction for audit trail, score will be logged after game logic executes
+      // Pass direction for audit trail
       dbMoveResult = await db.deductMove(userId, direction, 0);
     } catch (dbErr) {
       console.error(`[Move] DB deduction failed for ${userId}:`, dbErr.message);
-      // DB failed - abort before touching in-memory state
+      // DB failed - abort
       return res.status(503).json({
         success: false,
         error: 'MOVE_SYNC_ERROR',
@@ -889,7 +891,7 @@ app.post('/api/move', limiters.moves, async (req, res) => {
       });
     }
 
-    if (!dbMoveResult || dbMoveResult.balance < 0) {
+    if (!dbMoveResult || (dbMoveResult.balance !== undefined && dbMoveResult.balance < 0)) {
       console.error(`[Move] DB returned invalid state for ${userId}`);
       return res.status(503).json({
         success: false,
