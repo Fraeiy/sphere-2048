@@ -114,6 +114,31 @@ function hasExtension() {
 }
 
 /**
+ * Reset wallet state to prevent pollution from previous connections
+ */
+function resetWalletState() {
+  sphereClient = null;
+  transport = null;
+  uctCoinId = null;
+  uctDecimals = UCT_DECIMALS;
+  walletIdentity = null;
+  uctBalance = 0;
+  moveCount = 0;
+  isConnected = false;
+  walletReady = false;
+  
+  // Clean up stale popup
+  if (popupWindow && !popupWindow.closed) {
+    try {
+      popupWindow.close();
+    } catch (err) {
+      console.warn('[Wallet] Error closing popup:', err.message);
+    }
+  }
+  popupWindow = null;
+}
+
+/**
  * Wait for wallet host to be ready (based on Boxy-Run implementation)
  */
 function waitForHostReady() {
@@ -333,6 +358,9 @@ async function registerPlayerWithGame(identity) {
  * @returns {Promise<boolean>}
  */
 async function connectWallet(preOpenedPopup = null) {
+  // Reset wallet state to prevent pollution from previous connections
+  resetWalletState();
+  
   try {
     showMessage('Opening Sphere wallet…', 'warn');
 
@@ -868,18 +896,43 @@ function updateWalletUI() {
   updateBalanceDisplay();
 }
 
-// ─── Session ID ───────────────────────────────────────────────────────────────
+// ── Session ID ────────────────────────────────────────────────────────────────
 
 /**
  * A stable, per-tab identifier.
  * Stored in sessionStorage so it survives a page refresh but not a new tab.
+ * Generates a new one if not found (instead of using empty string).
  */
-let sessionId = sessionStorage.getItem('sphere2048-session') ?? '';
+function initializeSessionId() {
+  let id = sessionStorage.getItem('sphere2048-session');
+  if (!id || id.trim() === '') {
+    // Generate new session ID if not found or empty
+    id = `session-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    try {
+      sessionStorage.setItem('sphere2048-session', id);
+    } catch (err) {
+      console.error('[Session] QuotaExceededError:', err.message);
+      // Fallback if storage quota exceeded
+      id = `session-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+    }
+  }
+  return id;
+}
+
+let sessionId = initializeSessionId();
 
 /** Updates the stored session ID when the server returns one. */
 function setSessionId(id) {
+  if (!id || id.trim() === '') {
+    console.warn('[Session] Attempt to set empty session ID, ignoring');
+    return;
+  }
   sessionId = id;
-  sessionStorage.setItem('sphere2048-session', id);
+  try {
+    sessionStorage.setItem('sphere2048-session', id);
+  } catch (err) {
+    console.error('[Session] Failed to persist session ID:', err.message);
+  }
 }
 
 // ─── API Helpers ──────────────────────────────────────────────────────────────

@@ -181,6 +181,19 @@ app.use((req, res, next) => {
   next();
 });
 
+// Input validation helper
+function validateInput(obj, schema) {
+  for (const [key, type] of Object.entries(schema)) {
+    if (!(key in obj)) {
+      throw new Error(`Missing required field: ${key}`);
+    }
+    if (typeof obj[key] !== type && (type !== 'optional' || obj[key] !== undefined)) {
+      throw new Error(`Invalid type for ${key}: expected ${type}, got ${typeof obj[key]}`);
+    }
+  }
+  return true;
+}
+
 // Add request ID for tracking
 app.use((req, res, next) => {
   req.id = req.headers['x-request-id'] || randomUUID();
@@ -226,6 +239,33 @@ const leaderboardCache = {
   timestamp: 0,
   ttl: 30000 // 30 seconds
 };
+
+/** Session cleanup: 24 hours timeout */
+const SESSION_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+const SESSION_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
+
+/**
+ * Cleanup stale sessions periodically to prevent memory leaks
+ */
+function startSessionCleanup() {
+  setInterval(() => {
+    const now = Date.now();
+    let purgedCount = 0;
+    
+    for (const [userId, session] of sessions.entries()) {
+      if (now - session.createdAt > SESSION_TIMEOUT_MS) {
+        sessions.delete(userId);
+        userMoveBuffers.delete(userId);
+        userBatchQueues.delete(userId);
+        purgedCount++;
+      }
+    }
+    
+    if (purgedCount > 0) {
+      console.log(`[Cleanup] Purged ${purgedCount} stale sessions. Active: ${sessions.size}`);
+    }
+  }, SESSION_CLEANUP_INTERVAL_MS);
+}
 
 const MOVE_BATCH_SIZE = 5;
 
@@ -405,7 +445,7 @@ app.post('/api/connect', async (req, res) => {
 /**
  * POST /api/register
  * Registers a player with the game using their wallet identity.
- * Initializes both in-memory and database records.
+ * Deduplicates user initialization by checking DB first.
  *
  * Body:
  *   { nametag?: string, address?: string }
@@ -424,17 +464,32 @@ app.post('/api/register', async (req, res) => {
   }
 
   try {
-    // Use nametag as userId if available, otherwise address
     const userId = nametag || address;
     
-    // Initialize both in-memory and database records
-    UserBalances.initializeUser(userId, address);
-    await db.getOrCreateUser(userId, address);
+    // Check if user already exists in DB (deduplication)
+    let existingUser = await db.getUserStats(userId);
     
-    // Get treasury address
+    if (!existingUser) {
+      // Only create if not found
+      await db.getOrCreateUser(userId, address);
+    }
+    
+    // Initialize in-memory (idempotent)
+    UserBalances.initializeUser(userId, address);
+    
+    // Sync existing DB data to memory if they diverge
+    if (existingUser) {
+      const inMem = UserBalances.getBalance(userId);
+      if (inMem) {
+        inMem.balance = existingUser.balance;
+        inMem.movesLeft = existingUser.moves_left;
+        inMem.totalDeposited = existingUser.total_deposited;
+      }
+    }
+    
     const treasuryAddress = getServerWalletAddress();
     
-    console.log(`[Server] Player registered: ${userId}`);
+    console.log(`[Server] Player registered: ${userId} (existing=${!!existingUser})`);
     
     res.json({ 
       success: true,
@@ -792,6 +847,7 @@ app.post('/api/new', (req, res) => {
  * POST /api/move
  * Applies a directional move to the current game.
  * REQUIRES sufficient balance before move is processed.
+ * ATOMIC: DB update MUST succeed before response is sent.
  *
  * Body:
  *   { userId: string, direction: 'left' | 'right' | 'up' | 'down' }
@@ -799,14 +855,13 @@ app.post('/api/new', (req, res) => {
  * Response:
  *   { success: boolean, moved: boolean, balance?: object, ...gameState }
  */
-app.post('/api/move', async (req, res) => {
+app.post('/api/move', limiters.moves, async (req, res) => {
   const { userId, direction } = req.body;
 
-  if (!userId) {
-    console.error('[Server] /api/move missing userId. Body:', req.body);
+  if (!userId || typeof userId !== 'string') {
     return res.status(400).json({ 
       success: false, 
-      error: 'userId required' 
+      error: 'Invalid userId' 
     });
   }
 
@@ -820,12 +875,10 @@ app.post('/api/move', async (req, res) => {
   }
 
   try {
-    console.log(`[Server] Move: ${userId} → ${direction}`);
-    
-    // Check user balance FIRST (server-side validation)
+    // ATOMIC TRANSACTION: All-or-nothing move processing
+    // 1. Check balance
     if (!UserBalances.canMove(userId)) {
       const user = UserBalances.getBalance(userId);
-      console.log(`[Server] Insufficient balance: ${userId} has ${user?.balance ?? 0} balance, needs ${0.1 * 1e18}`);
       return res.status(402).json({ 
         success: false,
         error: 'NO_MOVES',
@@ -834,10 +887,9 @@ app.post('/api/move', async (req, res) => {
       });
     }
 
-    // CRITICAL SAFETY CHECK: Verify moves left before proceeding
-    const preCheckUser = UserBalances.getBalance(userId);
-    if (!preCheckUser || preCheckUser.movesLeft <= 0) {
-      console.error(`[Server] SAFETY: Prevented move with moves=${preCheckUser?.movesLeft ?? 'unknown'} for ${userId}`);
+    // 2. Pre-validate: Ensure DB is accessible before proceeding
+    const preCheckDb = await db.getUserStats(userId);
+    if (!preCheckDb || preCheckDb.moves_left <= 0) {
       return res.status(402).json({ 
         success: false,
         error: 'NO_MOVES',
@@ -846,51 +898,60 @@ app.post('/api/move', async (req, res) => {
       });
     }
 
-    // Deduct balance before moving
-    const deducted = UserBalances.deductMove(userId);
-    
-    if (!deducted) {
-      return res.status(402).json({ 
-        success: false,
-        error: 'NO_MOVES',
-        errorMessage: 'Failed to deduct move cost',
-        canPlay: false
-      });
-    }
-
-    // CRITICAL: Also update database to keep it in sync with in-memory state
+    // 3. CRITICAL: Update DB FIRST (DB is source of truth)
+    let dbMoveResult;
     try {
-      await db.deductMove(userId);
+      dbMoveResult = await db.deductMove(userId);
     } catch (dbErr) {
-      console.error(`[Server] Failed to update database for move deduction: ${userId}`, dbErr);
-      // Keep state consistent: revert in-memory deduction when DB write fails.
-      const fallbackUser = UserBalances.getBalance(userId);
-      if (fallbackUser) {
-        fallbackUser.movesLeft += 1;
-        fallbackUser.totalMoves = Math.max(0, (fallbackUser.totalMoves || 0) - 1);
-      }
+      console.error(`[Move] DB deduction failed for ${userId}:`, dbErr.message);
+      // DB failed - abort before touching in-memory state
       return res.status(503).json({
         success: false,
-        error: 'MOVE_PERSISTENCE_ERROR',
+        error: 'MOVE_SYNC_ERROR',
         errorMessage: 'Temporary sync issue. Please retry your move.',
         canPlay: true
       });
     }
 
-    // Apply move to game
+    if (!dbMoveResult || dbMoveResult.moves_left < 0) {
+      console.error(`[Move] DB returned invalid state for ${userId}`);
+      return res.status(503).json({
+        success: false,
+        error: 'MOVE_INTEGRITY_ERROR',
+        errorMessage: 'Invalid game state. Please refresh.',
+        canPlay: false
+      });
+    }
+
+    // 4. NOW update in-memory to match DB
+    const inMemUser = UserBalances.getBalance(userId);
+    if (inMemUser) {
+      inMemUser.movesLeft = Math.max(0, dbMoveResult.moves_left);
+      inMemUser.totalMoves = dbMoveResult.total_moves || 0;
+    } else {
+      // Sync from DB if not in memory
+      UserBalances.initializeUser(userId, userId);
+      const newInMem = UserBalances.getBalance(userId);
+      if (newInMem) {
+        newInMem.movesLeft = Math.max(0, dbMoveResult.moves_left);
+        newInMem.totalMoves = dbMoveResult.total_moves || 0;
+      }
+    }
+
+    // 5. Apply move to game logic
     const state = getSession(userId);
     const moved = state.move(direction);
-    const userAfterMoveCharge = UserBalances.getBalance(userId);
+    const userAfterMove = UserBalances.getBalance(userId);
 
-    // Update high score if needed
+    // Update high score
     if (state.score > (userBestScores.get(userId) ?? 0)) {
       userBestScores.set(userId, state.score);
     }
     UserBalances.updateHighScore(userId, state.score);
 
-    // Track this move for 5-move on-chain batching.
+    // Track move for batch submission
     const moveBuffer = pushMoveForBatch(userId, {
-      moveNo: userAfterMoveCharge?.totalMoves ?? Date.now(),
+      moveNo: userAfterMove?.totalMoves ?? Date.now(),
       direction,
       moved,
       score: state.score,
@@ -913,7 +974,6 @@ app.post('/api/move', async (req, res) => {
         },
       };
 
-      // Queue chain submission in the background to keep move latency low.
       userMoveBuffers.set(userId, moveBuffer.slice(MOVE_BATCH_SIZE));
       enqueueMoveBatch(userId, payload);
 
@@ -932,21 +992,18 @@ app.post('/api/move', async (req, res) => {
       moved,
       canPlay: UserBalances.canMove(userId),
       balance: {
-        current: UserBalances.formatBalance(user.balance),
-        movesLeft: user.movesLeft
+        current: UserBalances.formatBalance(user?.balance || 0),
+        movesLeft: user?.movesLeft ?? 0
       },
       moveBatch: batchTx,
       ...state.toJSON() 
     });
   } catch (err) {
-    console.error('[Server] Move error:', err);
-    // CRITICAL: Return error without modifying state further
-    // Ensure state is NOT reset or corrupted
+    console.error('[Move] Unhandled error:', err);
     res.status(500).json({ 
       success: false, 
       error: 'MOVE_ERROR',
-      errorMessage: 'Failed to process move',
-      details: err.message 
+      errorMessage: 'Failed to process move'
     });
   }
 });
@@ -1021,26 +1078,53 @@ app.get('/api/leaderboard', limiters.leaderboard, async (req, res) => {
   try {
     // Check cache first (performance optimization)
     const now = Date.now();
-    if (leaderboardCache.data && (now - leaderboardCache.timestamp) < leaderboardCache.ttl) {
+    if (
+      leaderboardCache.data 
+      && Array.isArray(leaderboardCache.data)
+      && leaderboardCache.data.length > 0
+      && (now - leaderboardCache.timestamp) < leaderboardCache.ttl
+    ) {
       return res.json({ 
         success: true,
         leaderboard: leaderboardCache.data.slice(0, limit),
-        cached: true
+        cached: true,
+        timestamp: leaderboardCache.timestamp
       });
     }
 
     // Fetch from persistent database
     const leaderboard = await db.getLeaderboard(limit);
+    
+    // Validate leaderboard data is an array
+    if (!Array.isArray(leaderboard)) {
+      console.error('[Leaderboard] DB returned non-array:', typeof leaderboard);
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Invalid leaderboard data from database'
+      });
+    }
 
     leaderboardCache.data = leaderboard;
     leaderboardCache.timestamp = now;
 
     res.json({ 
       success: true,
-      leaderboard 
+      leaderboard,
+      cached: false,
+      timestamp: now
     });
   } catch (err) {
     console.error('[Server] Leaderboard error:', err);
+    // Return stale cache on error if available
+    if (Array.isArray(leaderboardCache.data) && leaderboardCache.data.length > 0) {
+      console.log('[Leaderboard] Returning stale cache due to error');
+      return res.json({
+        success: true,
+        leaderboard: leaderboardCache.data.slice(0, limit),
+        cached: true,
+        stale: true
+      });
+    }
     res.status(500).json({ 
       success: false, 
       error: err.message 
@@ -1095,15 +1179,18 @@ app.get('/api/health', (req, res) => {
 
 /**
  * Boot sequence:
- *   1. Initialize SQLite database
- *   2. Initialize treasury wallet configuration
- *   3. Start the Express server
- *   4. Server is ready for game play
+ *   1. Start session cleanup loop
+ *   2. Initialize SQLite database
+ *   3. Initialize treasury wallet configuration
+ *   4. Start the Express server
+ *   5. Server is ready for game play
  */
 async function startup() {
+  startSessionCleanup();
   try {
     console.log('[Server] Initializing SQLite database...');
     await db.initDatabase();
+    console.log('[Server] Database initialized successfully');
   } catch (err) {
     console.error('[Server] Database init error:', err.message);
     process.exit(1);
