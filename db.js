@@ -210,65 +210,94 @@ export async function getOrCreateUser(userId, walletId = null) {
 }
 
 /**
- * Add a deposit to user account
+ * Add a deposit to user account (UPDATED: Uses new CENTS-based balance system)
  * @param {string} userId - User identifier
- * @param {number} amount - Amount in atomic units
- * @param {string} txHash - Transaction hash
+ * @param {number} atomicAmount - Amount in atomic units (1e18 = 1 UCT)
+ * @param {string} txHash - Transaction hash for verification
  * @returns {Promise<object>} Updated user record
  */
-export async function addDeposit(userId, amount, txHash = null, moveCredits = null) {
+export async function addDeposit(userId, atomicAmount, txHash = null) {
   const user = await getOrCreateUser(userId);
   const now = Date.now();
-  const MOVE_COST_ATOMIC = 100000000000000000; // 0.1 UCT in atomic units (18 decimals)
 
-  // Update user balance
-  const newBalance = user.balance + amount;
-  const creditedMoves = Number.isInteger(moveCredits)
-    ? Math.max(0, moveCredits)
-    : Math.floor(amount / MOVE_COST_ATOMIC);
-  const newMovesLeft = user.moves_left + creditedMoves; // 0.1 UCT per move
+  // Update user balance (balance field stores atomic units)
+  const newBalance = user.balance + atomicAmount;
 
   await run(
     `UPDATE users 
-     SET balance = ?, total_deposited = ?, moves_left = ?, updated_at = ?
+     SET balance = ?, total_deposited = ?, updated_at = ?
      WHERE user_id = ?`,
-    [newBalance, user.total_deposited + amount, newMovesLeft, now, userId]
+    [newBalance, user.total_deposited + atomicAmount, now, userId]
   );
 
-  // Log deposit transaction
+  // Log deposit transaction (with tx_hash for blockchain verification)
   await run(
-    `INSERT INTO deposits (user_id, wallet_id, amount, tx_hash, deposit_date, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [userId, user.wallet_id, amount, txHash, now, now]
+    `INSERT INTO deposits (user_id, wallet_id, amount, tx_hash, deposit_date, created_at, verified)
+     VALUES (?, ?, ?, ?, ?, ?, 1)`,
+    [userId, user.wallet_id, atomicAmount, txHash || 'manual', now, now]
   );
 
-  console.log(`[DB] Deposit: ${userId} +${amount} (+${creditedMoves} moves, total ${newMovesLeft})`);
+  // Convert to CENTS for logging: 1e18 → divide by 1e16 = CENTS
+  const depositCents = Math.round(atomicAmount / 1e16);
+  const depositUCT = (depositCents / 100).toFixed(2);
+  const newBalanceCents = Math.round(newBalance / 1e16);
+  const newBalanceUCT = (newBalanceCents / 100).toFixed(2);
+  const movesAvailable = Math.floor(newBalanceCents / 10);
+
+  console.log(
+    `[DB] Deposit: ${userId} +${depositUCT} UCT (atomic: +${atomicAmount}). ` +
+    `Balance: ${newBalanceUCT} UCT (moves: ${movesAvailable})`
+  );
 
   return getOrCreateUser(userId);
 }
 
 /**
- * Deduct move cost from user balance
+ * Deduct move cost from user balance (UPDATED: Logs to moves table for audit)
  * @param {string} userId - User identifier
- * @returns {Promise<boolean>} true if successful, false if insufficient balance
+ * @param {string} direction - Move direction (up/down/left/right)
+ * @param {number} score - Current score after move
+ * @returns {Promise<object>} Updated user record
  */
-export async function deductMove(userId) {
+export async function deductMove(userId, direction = 'unknown', score = 0) {
   const user = await getOrCreateUser(userId);
+  const MOVE_COST_ATOMIC = 100000000000000000; // 0.1 UCT = 1e17 atomic units
 
-  if (user.moves_left <= 0) {
-    return false;
+  // Check if user has sufficient balance for a move
+  if (user.balance < MOVE_COST_ATOMIC) {
+    console.log(`[DB] Insufficient balance for move: ${userId}`);
+    return null; // Return null instead of false for consistency
   }
 
   const now = Date.now();
+  const newBalance = user.balance - MOVE_COST_ATOMIC;
+  const moveNumber = (user.total_moves || 0) + 1;
+
+  // Deduct from balance, increment move count
   await run(
     `UPDATE users 
-     SET moves_left = moves_left - 1, total_moves = total_moves + 1, last_move = ?, updated_at = ?
+     SET balance = ?, total_moves = total_moves + 1, last_move = ?, updated_at = ?
      WHERE user_id = ?`,
-    [now, now, userId]
+    [newBalance, now, now, userId]
   );
 
-  console.log(`[DB] Move deducted: ${userId} (moves_left: ${user.moves_left - 1})`);
-  return true;
+  // Log move to moves table for blockchain audit trail
+  await run(
+    `INSERT INTO moves (user_id, move_number, direction, score_after, created_at)
+     VALUES (?, ?, ?, ?, ?)`,
+    [userId, moveNumber, direction, score, now]
+  );
+
+  const updatedUser = await get('SELECT * FROM users WHERE user_id = ?', [userId]);
+  const balanceCents = Math.round(newBalance / 1e16);
+  const movesRemaining = Math.floor(balanceCents / 10);
+  
+  console.log(
+    `[DB] Move: ${userId} dir=${direction} (balance: ${user.balance} → ${newBalance}, ` +
+    `moves remaining: ${movesRemaining})`
+  );
+  
+  return updatedUser;
 }
 
 /**
@@ -334,6 +363,100 @@ export async function getUserStats(userId) {
 }
 
 /**
+ * Get full deposit history for a user (for audit purposes)
+ * @param {string} userId - User identifier
+ * @returns {Promise<object[]>} Array of deposits with metadata
+ */
+export async function getDepositHistory(userId) {
+  const deposits = await all(
+    `SELECT id, amount, tx_hash, verified, deposit_date, created_at 
+     FROM deposits 
+     WHERE user_id = ? 
+     ORDER BY created_at DESC`,
+    [userId]
+  );
+
+  return deposits.map(d => ({
+    id: d.id,
+    amountAtomic: d.amount,
+    amountUCT: (d.amount / 1e18).toFixed(6),
+    amountCents: Math.round(d.amount / 1e16),
+    txHash: d.tx_hash,
+    verified: Boolean(d.verified),
+    depositDate: new Date(d.deposit_date).toISOString(),
+    timestamp: d.created_at
+  }));
+}
+
+/**
+ * Get move history for a user (for blockchain audit)
+ * @param {string} userId - User identifier
+ * @param {number} limit - Max results to return
+ * @returns {Promise<object[]>} Array of moves with metadata
+ */
+export async function getMoveHistory(userId, limit = 50) {
+  const moves = await all(
+    `SELECT id, move_number, direction, score_after, created_at 
+     FROM moves 
+     WHERE user_id = ? 
+     ORDER BY created_at DESC 
+     LIMIT ?`,
+    [userId, limit]
+  );
+
+  return moves.map(m => ({
+    id: m.id,
+    moveNumber: m.move_number,
+    direction: m.direction,
+    scoreAfter: m.score_after,
+    timestamp: m.created_at,
+    date: new Date(m.created_at).toISOString()
+  }));
+}
+
+/**
+ * Verify balance by calculating from deposit/move history
+ * This ensures the stored balance is correct and not corrupted
+ * @param {string} userId - User identifier
+ * @returns {Promise<object>} { storedBalance, calculatedBalance, isValid, deposits, moves }
+ */
+export async function verifyBalanceFromHistory(userId) {
+  const user = await getOrCreateUser(userId);
+  const deposits = await all(
+    'SELECT amount FROM deposits WHERE user_id = ?',
+    [userId]
+  );
+  const moves = await all(
+    'SELECT COUNT(*) as moveCount FROM moves WHERE user_id = ?',
+    [userId]
+  );
+
+  // Calculate: Total deposited - (moves × move cost)
+  const totalDeposited = deposits.reduce((sum, d) => sum + d.amount, 0);
+  const moveCount = moves[0]?.moveCount || 0;
+  const MOVE_COST_ATOMIC = 100000000000000000;
+  const totalSpent = moveCount * MOVE_COST_ATOMIC;
+  const calculatedBalance = totalDeposited - totalSpent;
+  const storedBalance = user.balance;
+
+  const isValid = storedBalance === calculatedBalance;
+
+  return {
+    storedBalance,
+    calculatedBalance,
+    isValid,
+    discrepancy: storedBalance - calculatedBalance,
+    totalDeposited,
+    totalDepositsUCT: (totalDeposited / 1e18).toFixed(6),
+    moveCount,
+    totalSpent,
+    totalSpentUCT: (totalSpent / 1e18).toFixed(6),
+    depositRecords: deposits.length,
+    moveRecords: moveCount
+  };
+}
+
+/**
  * Get leaderboard (top scores)
  * @param {number} limit - Number of results
  * @returns {Promise<object[]>}
@@ -393,19 +516,6 @@ export async function recordMove(userId, moveNumber, direction, scoreAfter, game
 /**
  * Get user's deposit history
  * @param {string} userId - User identifier
- * @returns {Promise<object[]>}
- */
-export async function getDepositHistory(userId, limit = 50) {
-  return all(
-    `SELECT * FROM deposits WHERE user_id = ? ORDER BY created_at DESC LIMIT ?`,
-    [userId, limit]
-  );
-}
-
-/**
- * Get recent scores for a user
- * @param {string} userId - User identifier
- * @param {number} limit - Number of results
  * @returns {Promise<object[]>}
  */
 export async function getRecentScores(userId, limit = 10) {

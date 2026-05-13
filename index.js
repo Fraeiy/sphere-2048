@@ -393,22 +393,12 @@ app.post('/api/connect', async (req, res) => {
     let restoredFromDatabase = false;
     
     if (dbUser) {
-      // User exists in database - restore their balance!
-      console.log(`[Server] User ${userId} RESTORED from database: moves_left=${dbUser.moves_left}, balance=${dbUser.balance}`);
+      // Restore from database (source of truth)
+      console.log(`[Server] User ${userId} RESTORED from database`);
       restoredFromDatabase = true;
-      
-      // Sync to in-memory storage
-      UserBalances.initializeUser(userId, walletId);
-      const inMemUser = UserBalances.getBalance(userId);
-      if (inMemUser) {
-        inMemUser.balance = dbUser.balance;
-        inMemUser.movesLeft = dbUser.moves_left;
-        inMemUser.totalMoves = dbUser.total_moves;
-        inMemUser.totalDeposited = dbUser.total_deposited;
-        inMemUser.highScore = dbUser.high_score;
-      }
+      UserBalances.syncFromDatabase(userId, dbUser);
     } else {
-      // New user - initialize both DB and in-memory
+      // New user
       console.log(`[Server] New user ${userId} - initializing`);
       UserBalances.initializeUser(userId, walletId);
       await db.getOrCreateUser(userId, walletId);
@@ -416,17 +406,18 @@ app.post('/api/connect', async (req, res) => {
     
     // Get updated user data
     const user = UserBalances.getBalance(userId);
+    const moves = UserBalances.calculateMoves(user.balanceCents);
     const treasuryAddress = getServerWalletAddress();
     
-    console.log(`[Server] User connected: ${userId}, restoredFromDB=${restoredFromDatabase}`);
+    console.log(`[Server] User connected: ${userId}, balance=${UserBalances.centsToUCT(user.balanceCents)} UCT, moves=${moves}`);
     
     res.json({ 
       success: true, 
       userId,
       balance: {
-        current: UserBalances.formatBalance(user.balance),
-        totalDeposited: UserBalances.formatBalance(user.totalDeposited),
-        movesLeft: user.movesLeft,
+        current: UserBalances.centsToUCT(user.balanceCents),
+        totalDeposited: UserBalances.centsToUCT(user.totalDepositedCents),
+        movesLeft: moves,
         highScore: user.highScore || 0
       },
       treasuryAddress,
@@ -551,32 +542,21 @@ app.get('/api/balance', async (req, res) => {
       });
     }
 
-    // Convert atomic units to display format
-    const currentBalance = UserBalances.formatBalance(dbUser.balance);
-    const totalDeposited = UserBalances.formatBalance(dbUser.total_deposited);
+    // Sync from DB to in-memory
+    const user = UserBalances.syncFromDatabase(userId, dbUser);
+    const moves = UserBalances.calculateMoves(user.balanceCents);
     
-    console.log(`[Balance] User ${userId}: moves_left=${dbUser.moves_left}, balance=${currentBalance}, high_score=${dbUser.high_score}`);
-    
-    // Also sync to in-memory for performance (but DB is source of truth)
-    UserBalances.initializeUser(userId, dbUser.wallet_id);
-    const inMemUser = UserBalances.getBalance(userId);
-    if (inMemUser) {
-      inMemUser.balance = dbUser.balance;
-      inMemUser.movesLeft = dbUser.moves_left;
-      inMemUser.totalMoves = dbUser.total_moves;
-      inMemUser.totalDeposited = dbUser.total_deposited;
-      inMemUser.highScore = dbUser.high_score;
-    }
+    console.log(`[Balance] User ${userId}: ${UserBalances.centsToUCT(user.balanceCents)} UCT, ${moves} moves, high_score=${user.highScore}`);
 
     res.json({ 
       success: true,
       userId,
       balance: {
-        current: currentBalance,
-        totalDeposited: totalDeposited,
-        movesLeft: dbUser.moves_left,
-        totalMoves: dbUser.total_moves,
-        highScore: dbUser.high_score
+        current: UserBalances.centsToUCT(user.balanceCents),
+        totalDeposited: UserBalances.centsToUCT(user.totalDepositedCents),
+        movesLeft: moves,
+        totalMoves: user.totalMovesMade,
+        highScore: user.highScore
       },
       source: 'database',
       timestamp: Date.now()
@@ -634,18 +614,19 @@ app.post('/api/verify-deposit', limiters.deposits, async (req, res) => {
       });
     }
 
-    // Add deposit to user balance in both systems
+    // Add deposit to user balance
     const amountAtomic = Math.round(uct * 1e18);
     const moveCredits = Math.max(0, Math.floor(uct * 10));
     
-    // Update in-memory balance
-    const userInMem = UserBalances.addDeposit(userId, amountAtomic);
+    // Update in-memory first
+    const userInMem = UserBalances.addDepositAtomic(userId, amountAtomic);
     
-    // Store to persistent database with transaction hash
+    // Persist to database
     const userDb = await db.addDeposit(userId, amountAtomic, txHash || tx.hash, moveCredits);
 
     // Log audit trail
-    console.log(`[Deposit] Processed: userId=${userId}, amount=${uct}UCT, tx=${txHash || tx.hash}`);
+    const moves = UserBalances.calculateMoves(userInMem.balanceCents);
+    console.log(`[Deposit] Processed: userId=${userId}, +${uct} UCT, tx=${txHash || tx.hash}, moves=${moves}`);
 
     res.json({ 
       success: true,
@@ -657,9 +638,9 @@ app.post('/api/verify-deposit', limiters.deposits, async (req, res) => {
         verified: true
       },
       balance: {
-        current: UserBalances.formatBalance(userDb.balance),
-        totalDeposited: UserBalances.formatBalance(userDb.total_deposited),
-        movesLeft: userDb.moves_left
+        current: UserBalances.centsToUCT(userInMem.balanceCents),
+        totalDeposited: UserBalances.centsToUCT(userInMem.totalDepositedCents),
+        movesLeft: moves
       }
     });
   } catch (err) {
@@ -704,23 +685,24 @@ app.post('/api/test-deposit', async (req, res) => {
     await db.getOrCreateUser(userId, userId);
     UserBalances.initializeUser(userId, userId);
 
-    // Add deposit directly without blockchain verification
+    // Add test deposit
     const amountAtomic = Math.round(uct * 1e18);
     const moveCredits = Math.max(0, Math.floor(uct * 10));
-    const user = UserBalances.addDeposit(userId, amountAtomic);
+    const user = UserBalances.addDepositAtomic(userId, amountAtomic);
 
-    // CRITICAL: Persist to database to ensure consistency
+    // Persist to database
     await db.addDeposit(userId, amountAtomic, `test-deposit-${Date.now()}`, moveCredits);
 
-    console.log(`[TestDeposit] Credited ${uct} UCT to ${userId}`);
+    const moves = UserBalances.calculateMoves(user.balanceCents);
+    console.log(`[TestDeposit] Credited ${uct} UCT to ${userId}, now has ${moves} moves`);
 
     res.json({ 
       success: true,
       balance: {
-        current: UserBalances.formatBalance(user.balance),
-        totalDeposited: UserBalances.formatBalance(user.totalDeposited),
-        movesLeft: user.movesLeft,
-        totalMoves: user.totalMoves
+        current: UserBalances.centsToUCT(user.balanceCents),
+        totalDeposited: UserBalances.centsToUCT(user.totalDepositedCents),
+        movesLeft: moves,
+        totalMoves: user.totalMovesMade
       }
     });
   } catch (err) {
@@ -754,36 +736,29 @@ app.get('/api/state', async (req, res) => {
     const state = getSession(userId);
     const session = sessions.get(userId);
     
-    // CRITICAL: Read balance from DATABASE, not in-memory!
-    // This ensures accuracy if server was restarted
+    // Read from database (source of truth)
     const dbUser = await db.getUserStats(userId);
-    const inMemUser = UserBalances.getBalance(userId);
     
-    // Sync database balance to in-memory if they differ
-    if (dbUser && inMemUser) {
-      if (dbUser.balance !== inMemUser.balance || dbUser.moves_left !== inMemUser.movesLeft) {
-        console.log(`[State] Syncing user ${userId} from database: DB moves=${dbUser.moves_left}, mem moves=${inMemUser.movesLeft}`);
-        inMemUser.balance = dbUser.balance;
-        inMemUser.movesLeft = dbUser.moves_left;
-        inMemUser.totalMoves = dbUser.total_moves;
-      }
+    if (dbUser) {
+      // Sync DB state to in-memory
+      UserBalances.syncFromDatabase(userId, dbUser);
+    } else {
+      // User has no DB record yet, use in-memory
+      UserBalances.initializeUser(userId, userId);
     }
     
-    // Use database balance as source of truth
-    const currentUser = dbUser || inMemUser;
-    const resolvedMovesLeft = currentUser
-      ? (currentUser.moves_left ?? currentUser.movesLeft ?? 0)
-      : 0;
+    const user = UserBalances.getBalance(userId);
+    const moves = UserBalances.calculateMoves(user.balanceCents);
 
     res.json({ 
       userId,
-      canPlay: resolvedMovesLeft > 0,
+      canPlay: moves > 0,
       lastBatchTxHash: session?.lastBatchTxHash || null,
-      balance: currentUser ? {
-        current: UserBalances.formatBalance(currentUser.balance),
-        movesLeft: resolvedMovesLeft,
+      balance: {
+        current: UserBalances.centsToUCT(user.balanceCents),
+        movesLeft: moves,
         source: 'database'
-      } : null,
+      },
       ...state.toJSON() 
     });
   } catch (err) {
@@ -889,7 +864,7 @@ app.post('/api/move', limiters.moves, async (req, res) => {
 
     // 2. Pre-validate: Ensure DB is accessible before proceeding
     const preCheckDb = await db.getUserStats(userId);
-    if (!preCheckDb || preCheckDb.moves_left <= 0) {
+    if (!preCheckDb || preCheckDb.balance < 100000000000000000) { // < 0.1 UCT
       return res.status(402).json({ 
         success: false,
         error: 'NO_MOVES',
@@ -901,7 +876,8 @@ app.post('/api/move', limiters.moves, async (req, res) => {
     // 3. CRITICAL: Update DB FIRST (DB is source of truth)
     let dbMoveResult;
     try {
-      dbMoveResult = await db.deductMove(userId);
+      // Pass direction for audit trail, score will be logged after game logic executes
+      dbMoveResult = await db.deductMove(userId, direction, 0);
     } catch (dbErr) {
       console.error(`[Move] DB deduction failed for ${userId}:`, dbErr.message);
       // DB failed - abort before touching in-memory state
@@ -913,7 +889,7 @@ app.post('/api/move', limiters.moves, async (req, res) => {
       });
     }
 
-    if (!dbMoveResult || dbMoveResult.moves_left < 0) {
+    if (!dbMoveResult || dbMoveResult.balance < 0) {
       console.error(`[Move] DB returned invalid state for ${userId}`);
       return res.status(503).json({
         success: false,
@@ -923,25 +899,12 @@ app.post('/api/move', limiters.moves, async (req, res) => {
       });
     }
 
-    // 4. NOW update in-memory to match DB
-    const inMemUser = UserBalances.getBalance(userId);
-    if (inMemUser) {
-      inMemUser.movesLeft = Math.max(0, dbMoveResult.moves_left);
-      inMemUser.totalMoves = dbMoveResult.total_moves || 0;
-    } else {
-      // Sync from DB if not in memory
-      UserBalances.initializeUser(userId, userId);
-      const newInMem = UserBalances.getBalance(userId);
-      if (newInMem) {
-        newInMem.movesLeft = Math.max(0, dbMoveResult.moves_left);
-        newInMem.totalMoves = dbMoveResult.total_moves || 0;
-      }
-    }
+    // 4. NOW sync in-memory to match DB
+    UserBalances.syncFromDatabase(userId, dbMoveResult);
 
     // 5. Apply move to game logic
     const state = getSession(userId);
     const moved = state.move(direction);
-    const userAfterMove = UserBalances.getBalance(userId);
 
     // Update high score
     if (state.score > (userBestScores.get(userId) ?? 0)) {
@@ -949,9 +912,12 @@ app.post('/api/move', limiters.moves, async (req, res) => {
     }
     UserBalances.updateHighScore(userId, state.score);
 
+    // Get updated user record for batch tracking
+    const userAfterMove = UserBalances.getBalance(userId);
+
     // Track move for batch submission
     const moveBuffer = pushMoveForBatch(userId, {
-      moveNo: userAfterMove?.totalMoves ?? Date.now(),
+      moveNo: userAfterMove?.totalMovesMade ?? Date.now(),
       direction,
       moved,
       score: state.score,
@@ -985,15 +951,16 @@ app.post('/api/move', limiters.moves, async (req, res) => {
     }
 
     const user = UserBalances.getBalance(userId);
+    const movesRemaining = UserBalances.calculateMoves(user?.balanceCents || 0);
 
     res.json({ 
       success: true,
       userId,
       moved,
-      canPlay: UserBalances.canMove(userId),
+      canPlay: movesRemaining > 0,
       balance: {
-        current: UserBalances.formatBalance(user?.balance || 0),
-        movesLeft: user?.movesLeft ?? 0
+        current: UserBalances.centsToUCT(user?.balanceCents || 0),
+        movesLeft: movesRemaining
       },
       moveBatch: batchTx,
       ...state.toJSON() 
@@ -1173,6 +1140,126 @@ app.get('/api/health', (req, res) => {
     uptime: process.uptime(),
     environment: process.env.NODE_ENV || 'development'
   });
+});
+
+/**
+ * GET /api/balance-audit
+ * Verifies user balance by recalculating from deposit and move history
+ * Ensures balance hasn't been corrupted or tampered with
+ *
+ * Query: userId (required)
+ * Response: {
+ *   isValid: boolean,
+ *   storedBalance: number (atomic units),
+ *   calculatedBalance: number (atomic units),
+ *   discrepancy: number,
+ *   deposits: { count, total, totalUCT },
+ *   moves: { count, totalSpent, totalSpentUCT },
+ *   audit: { passes all checks } | { has discrepancy }
+ * }
+ */
+app.get('/api/balance-audit', async (req, res) => {
+  const { userId } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId required'
+    });
+  }
+
+  try {
+    const audit = await db.verifyBalanceFromHistory(userId);
+    const balanceStatus = audit.isValid ? 'VALID' : 'MISMATCH';
+    
+    res.json({
+      success: true,
+      userId,
+      audit: balanceStatus,
+      stored: {
+        balance: audit.storedBalance,
+        balanceUCT: (audit.storedBalance / 1e18).toFixed(6),
+        balanceCents: Math.round(audit.storedBalance / 1e16)
+      },
+      calculated: {
+        balance: audit.calculatedBalance,
+        balanceUCT: (audit.calculatedBalance / 1e18).toFixed(6),
+        balanceCents: Math.round(audit.calculatedBalance / 1e16)
+      },
+      discrepancy: audit.discrepancy,
+      deposits: {
+        count: audit.depositRecords,
+        total: audit.totalDeposited,
+        totalUCT: audit.totalDepositsUCT
+      },
+      moves: {
+        count: audit.moveCount,
+        totalSpent: audit.totalSpent,
+        totalSpentUCT: audit.totalSpentUCT
+      }
+    });
+  } catch (err) {
+    console.error('[Audit] Balance check error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+/**
+ * GET /api/deposit-history
+ * Returns full deposit and move transaction history for audit purposes
+ *
+ * Query: userId (required), includePayload (optional, default: false)
+ * Response: {
+ *   deposits: [ { id, amount, amountUCT, txHash, verified, date } ],
+ *   moves: [ { moveNumber, direction, scoreAfter, date } ]
+ * }
+ */
+app.get('/api/deposit-history', async (req, res) => {
+  const { userId, includePayload } = req.query;
+
+  if (!userId) {
+    return res.status(400).json({
+      success: false,
+      error: 'userId required'
+    });
+  }
+
+  try {
+    const deposits = await db.getDepositHistory(userId);
+    const moves = await db.getMoveHistory(userId, includePayload ? 500 : 50);
+
+    const depositSummary = {
+      count: deposits.length,
+      totalUCT: deposits.reduce((sum, d) => sum + parseFloat(d.amountUCT), 0).toFixed(6),
+      verifiedCount: deposits.filter(d => d.verified).length
+    };
+
+    res.json({
+      success: true,
+      userId,
+      summary: {
+        deposits: depositSummary,
+        moves: {
+          count: moves.length,
+          avgScorePerMove: moves.length > 0 
+            ? (moves.reduce((sum, m) => sum + m.scoreAfter, 0) / moves.length).toFixed(2)
+            : 0
+        }
+      },
+      data: includePayload ? { deposits, moves } : undefined,
+      depositsCount: deposits.length,
+      movesCount: moves.length
+    });
+  } catch (err) {
+    console.error('[History] Fetch error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
 });
 
 // ─── Startup ──────────────────────────────────────────────────────────────────

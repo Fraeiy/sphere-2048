@@ -1,25 +1,26 @@
 /**
- * userBalances.js — User Balance & Deposit Tracking
+ * userBalances.js — User Balance & Deposit Tracking (REDESIGNED)
  *
- * Maintains in-memory user balances with the following structure:
+ * SIMPLE MODEL:
+ *   - Everything in CENTS (100 CENTS = 1 UCT)
+ *   - No floating point arithmetic
+ *   - 1 move costs exactly 10 CENTS (0.1 UCT)
+ *   - Moves = balanceCents / 10 (integer division)
+ *
+ * User record structure:
  * {
- *   userId: {
- *     walletId: string,              // wallet address or nametag
- *     balance: number,               // current UCT balance (in smallest units)
- *     totalDeposited: number,        // lifetime deposits
- *     movesLeft: number,             // current moves available
- *     totalMoves: number,            // lifetime moves
- *     lastMove: timestamp,
- *     highScore: number,
- *     createdAt: timestamp
- *   }
+ *   walletId: string,           // wallet address or nametag
+ *   balanceCents: number,       // balance in CENTS (100 = 1 UCT)
+ *   totalDepositedCents: number,// lifetime deposits in CENTS
+ *   totalMovesMade: number,     // lifetime moves
+ *   highScore: number,          // best score
+ *   createdAt: timestamp
  * }
  */
 
-const MOVE_COST_UCT = 0.1; // Effective cost per move (0.1 UCT)
-const MOVE_COST_ATOMIC = 100000000000000000; // 0.1 UCT in atomic units (18 decimals) - explicit constant to avoid floating point errors
-const BILLING_CHUNK_MOVES = 10; // Charge once every 10 moves
-const BILLING_CHUNK_ATOMIC = MOVE_COST_ATOMIC * BILLING_CHUNK_MOVES; // 1 UCT in atomic units
+// CONSTANTS - All in CENTS
+const MOVE_COST_CENTS = 10;        // 0.1 UCT = 10 CENTS
+const CENTS_PER_UCT = 100;         // 1 UCT = 100 CENTS
 
 /**
  * In-memory user balance store
@@ -28,24 +29,23 @@ const BILLING_CHUNK_ATOMIC = MOVE_COST_ATOMIC * BILLING_CHUNK_MOVES; // 1 UCT in
 const userBalances = new Map();
 
 /**
- * Create or update a user balance record
- * @param {string} userId - Unique identifier (wallet address or nametag)
- * @param {string} walletId - Wallet identifier for reference
- * @returns {object} Updated user balance record
+ * Initialize or get user balance record
+ * @param {string} userId - User identifier
+ * @param {string} walletId - Wallet address/nametag
+ * @returns {object} User record
  */
 export function initializeUser(userId, walletId) {
   if (!userBalances.has(userId)) {
-    userBalances.set(userId, {
+    const record = {
       walletId,
-      balance: 0,
-      totalDeposited: 0,
-      movesLeft: 0,
-      pendingMovesInBatch: 0,
-      totalMoves: 0,
-      lastMove: null,
+      balanceCents: 0,
+      totalDepositedCents: 0,
+      totalMovesMade: 0,
       highScore: 0,
       createdAt: Date.now(),
-    });
+    };
+    userBalances.set(userId, record);
+    console.log(`[Balance] Initialized user: ${userId}`);
   } else {
     const user = userBalances.get(userId);
     if (walletId && walletId !== user.walletId) {
@@ -56,32 +56,91 @@ export function initializeUser(userId, walletId) {
 }
 
 /**
- * Add a deposit to a user's account
+ * Get user record
  * @param {string} userId - User identifier
- * @param {number} amount - Amount in atomic units (18 decimals for UCT)
+ * @returns {object|null}
+ */
+export function getBalance(userId) {
+  return userBalances.get(userId) || null;
+}
+
+/**
+ * Add a deposit in UCT (converts to CENTS internally)
+ * @param {string} userId - User identifier
+ * @param {number} uct - Amount in UCT (e.g., 30.5)
  * @returns {object} Updated user record
  */
-export function addDeposit(userId, amount) {
+export function addDepositUCT(userId, uct) {
   const user = userBalances.get(userId);
   if (!user) {
-    throw new Error(`User ${userId} not found`);
+    throw new Error(`User ${userId} not found - call initializeUser first`);
   }
 
-  user.balance += amount;
-  user.totalDeposited += amount;
-  
-  // Calculate moves from amount (0.1 UCT per move = MOVE_COST_ATOMIC)
-  const newMoves = Math.floor(amount / MOVE_COST_ATOMIC);
-  user.movesLeft += newMoves;
+  // Convert UCT to CENTS: e.g., 30.5 UCT = 3050 CENTS
+  const depositCents = Math.round(uct * CENTS_PER_UCT);
+  const movesGained = Math.floor(depositCents / MOVE_COST_CENTS);
 
-  console.log(`[Balance] Deposit: ${userId} +${amount} (${newMoves} moves)`);
+  user.balanceCents += depositCents;
+  user.totalDepositedCents += depositCents;
+
+  console.log(
+    `[Balance] Deposit: ${userId} +${uct} UCT. ` +
+    `Balance: ${centsToUCT(user.balanceCents)} UCT, ` +
+    `Moves: ${calculateMoves(user.balanceCents)}, ` +
+    `Total deposited: ${centsToUCT(user.totalDepositedCents)} UCT`
+  );
+
   return user;
 }
 
 /**
- * Deduct move cost from user balance
+ * Add deposit from atomic units (blockchain)
  * @param {string} userId - User identifier
- * @returns {boolean} true if deduction successful, false if insufficient balance
+ * @param {number} atomicUnits - Amount in 1e18 units
+ * @returns {object} Updated user record
+ */
+export function addDepositAtomic(userId, atomicUnits) {
+  // Convert from atomic units to UCT: divide by 1e18
+  const uct = atomicUnits / 1e18;
+  return addDepositUCT(userId, uct);
+}
+
+/**
+ * Calculate moves from balance (simple integer division)
+ * @param {number} balanceCents - Balance in CENTS
+ * @returns {number} Number of moves available
+ */
+export function calculateMoves(balanceCents) {
+  return Math.floor(balanceCents / MOVE_COST_CENTS);
+}
+
+/**
+ * Check if user can make a move
+ * @param {string} userId - User identifier
+ * @returns {boolean}
+ */
+export function canMove(userId) {
+  const user = userBalances.get(userId);
+  if (!user) {
+    console.log(`[Balance] canMove: user ${userId} not found`);
+    return false;
+  }
+
+  const movesAvailable = calculateMoves(user.balanceCents);
+  const can = movesAvailable > 0;
+
+  console.log(
+    `[Balance] canMove(${userId}): balance=${centsToUCT(user.balanceCents)} UCT, ` +
+    `moves=${movesAvailable}, available=${can}`
+  );
+
+  return can;
+}
+
+/**
+ * Deduct a move from user balance
+ * @param {string} userId - User identifier
+ * @returns {boolean} true if successful
  */
 export function deductMove(userId) {
   const user = userBalances.get(userId);
@@ -89,65 +148,28 @@ export function deductMove(userId) {
     throw new Error(`User ${userId} not found`);
   }
 
-  if (user.movesLeft <= 0) {
-    return false; // No move credits left
+  const movesAvailable = calculateMoves(user.balanceCents);
+  if (movesAvailable <= 0) {
+    console.log(
+      `[Balance] Cannot deduct move: ${userId} has 0 moves (${centsToUCT(user.balanceCents)} UCT)`
+    );
+    return false;
   }
 
-  user.movesLeft -= 1;
-  user.totalMoves += 1;
-  user.pendingMovesInBatch = (user.pendingMovesInBatch || 0) + 1;
-  user.lastMove = Date.now();
+  user.balanceCents -= MOVE_COST_CENTS;
+  user.totalMovesMade += 1;
 
-  // Bill 1 UCT after every 10 successful moves.
-  if (user.pendingMovesInBatch >= BILLING_CHUNK_MOVES) {
-    if (user.balance < BILLING_CHUNK_ATOMIC) {
-      // Safety guard: this should not happen if movesLeft is consistent.
-      user.pendingMovesInBatch = BILLING_CHUNK_MOVES;
-      user.movesLeft += 1;
-      user.totalMoves -= 1;
-      return false;
-    }
-    user.balance -= BILLING_CHUNK_ATOMIC;
-    user.pendingMovesInBatch = 0;
-  }
-
-  // Final settlement: if all move credits are used, clear any remaining
-  // partial batch so the displayed balance cannot stay non-zero.
-  if (user.movesLeft === 0 && user.pendingMovesInBatch > 0) {
-    const remainingCharge = user.pendingMovesInBatch * MOVE_COST_ATOMIC;
-    user.balance = Math.max(0, user.balance - remainingCharge);
-    user.pendingMovesInBatch = 0;
-  }
+  console.log(
+    `[Balance] Move deducted: ${userId}. ` +
+    `Remaining: ${centsToUCT(user.balanceCents)} UCT (${calculateMoves(user.balanceCents)} moves left). ` +
+    `Total moves: ${user.totalMovesMade}`
+  );
 
   return true;
 }
 
 /**
- * Get user balance info
- * @param {string} userId - User identifier
- * @returns {object|null} User balance record or null if not found
- */
-export function getBalance(userId) {
-  return userBalances.get(userId) || null;
-}
-
-/**
- * Check if user has enough balance for a move
- * @param {string} userId - User identifier
- * @returns {boolean} true if user has sufficient balance
- */
-export function canMove(userId) {
-  const user = userBalances.get(userId);
-  const hasBalance = !!user && user.movesLeft > 0;
-  console.log(`[Balance] canMove(${userId}): user=${!!user}, movesLeft=${user?.movesLeft ?? 'N/A'}, pendingBatch=${user?.pendingMovesInBatch ?? 'N/A'}, can=${hasBalance}`);
-  if (!user) {
-    console.log(`[Balance] User not found in map. Keys: ${Array.from(userBalances.keys()).join(', ')}`);
-  }
-  return hasBalance;
-}
-
-/**
- * Update user high score
+ * Update high score
  * @param {string} userId - User identifier
  * @param {number} score - New score
  */
@@ -157,81 +179,102 @@ export function updateHighScore(userId, score) {
 
   if (score > user.highScore) {
     user.highScore = score;
-    console.log(`[Balance] High score update: ${userId} → ${score}`);
+    console.log(`[Balance] High score: ${userId} → ${score}`);
   }
 }
 
 /**
- * Get all registered users (for leaderboard, etc.)
- * @returns {object[]} Array of user records
+ * Get all users for leaderboard
+ * @returns {object[]}
  */
 export function getAllUsers() {
-  return Array.from(userBalances.entries()).map(([userId, value]) => ({
-    userId,
-    ...value,
-  }));
+  return Array.from(userBalances.values());
 }
 
 /**
  * Get top users by high score
- * @param {number} limit - Number of users to return
- * @returns {object[]} Array of top users sorted by high score
+ * @param {number} limit
+ * @returns {object[]}
  */
 export function getLeaderboard(limit = 10) {
-  return Array.from(userBalances.entries())
-    .map(([userId, value]) => ({
-      userId,
-      ...value,
-    }))
+  return getAllUsers()
     .sort((a, b) => b.highScore - a.highScore)
     .slice(0, limit);
 }
 
 /**
- * Format balance for display (convert from atomic units)
- * @param {number} atomicAmount - Amount in atomic units (18 decimals)
- * @returns {number} Amount in UCT (readable format)
+ * Format CENTS to UCT string (e.g., 3050 CENTS → "30.50")
+ * @param {number} cents
+ * @returns {string}
  */
-export function formatBalance(atomicAmount) {
-  return (atomicAmount / 1e18).toFixed(2);
+export function centsToUCT(cents) {
+  const uct = cents / CENTS_PER_UCT;
+  return uct.toFixed(2);
 }
 
 /**
- * Convert UCT amount to atomic units
- * @param {number} uct - Amount in UCT
- * @returns {number} Amount in atomic units
+ * Format balance as display object
+ * @param {number} cents
+ * @returns {object}
  */
-export function toAtomicUnits(uct) {
-  return Math.round(uct * 1e18);
+export function formatBalance(cents) {
+  return {
+    uct: centsToUCT(cents),
+    cents: cents,
+    moves: calculateMoves(cents),
+  };
 }
 
 /**
- * Get move cost in atomic units
- * @returns {number} Move cost in atomic units
+ * Sync from database record
+ * @param {string} userId
+ * @param {object} dbRecord - { balance, total_deposited, total_moves, high_score, wallet_id }
  */
-export function getMoveCost() {
-  return MOVE_COST_ATOMIC;
+export function syncFromDatabase(userId, dbRecord) {
+  if (!dbRecord) return;
+
+  const user = initializeUser(userId, dbRecord.wallet_id);
+
+  // Convert from atomic units (1e18) to CENTS
+  // 1e18 atomic units = 1 UCT = 100 CENTS
+  // So: cents = atomicUnits / 1e16
+  user.balanceCents = Math.round((dbRecord.balance || 0) / 1e16);
+  user.totalDepositedCents = Math.round((dbRecord.total_deposited || 0) / 1e16);
+  user.totalMovesMade = dbRecord.total_moves || 0;
+  user.highScore = dbRecord.high_score || 0;
+
+  console.log(
+    `[Balance] Synced from DB: ${userId} ` +
+    `balance=${centsToUCT(user.balanceCents)} UCT, ` +
+    `moves=${calculateMoves(user.balanceCents)}, ` +
+    `total_deposited=${centsToUCT(user.totalDepositedCents)} UCT`
+  );
+
+  return user;
 }
 
 /**
- * Export all user data (for persistence to JSON if needed)
- * @returns {object} User balances as plain object
+ * Export user state for persistence
+ * @param {string} userId
+ * @returns {object}
  */
-export function exportData() {
-  const data = {};
-  userBalances.forEach((value, key) => {
-    data[key] = value;
-  });
-  return data;
+export function exportUserState(userId) {
+  const user = userBalances.get(userId);
+  if (!user) return null;
+
+  return {
+    walletId: user.walletId,
+    balanceUCT: centsToUCT(user.balanceCents),
+    balanceCents: user.balanceCents,
+    totalDepositedUCT: centsToUCT(user.totalDepositedCents),
+    totalDepositedCents: user.totalDepositedCents,
+    movesLeft: calculateMoves(user.balanceCents),
+    totalMovesMade: user.totalMovesMade,
+    highScore: user.highScore,
+  };
 }
 
-/**
- * Import user data from file or object
- * @param {object} data - User data to import
- */
-export function importData(data) {
-  Object.entries(data).forEach(([userId, userRecord]) => {
-    userBalances.set(userId, userRecord);
-  });
-  console.log(`[Balance] Imported ${Object.keys(data).length} user records`);
+// Legacy function names for compatibility
+export function addDeposit(userId, atomicUnits) {
+  return addDepositAtomic(userId, atomicUnits);
 }
