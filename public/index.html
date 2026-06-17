@@ -43,17 +43,17 @@
       padding: 20px 12px 24px;
     }
 
-    .app-shell { width: 100%; max-width: 640px; display: flex; flex-direction: column; align-items: stretch; }
-    .header { width: 100%; display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 12px; gap: 12px; }
+    .app-shell { width: 100%; max-width: 500px; display: flex; flex-direction: column; align-items: stretch; margin: 0 auto; }
+    .header { width: 100%; display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; gap: 12px; }
     .title { font-size: 3.4rem; font-weight: 900; color: var(--ink); line-height: 1; letter-spacing: -0.04em; text-shadow: 0 4px 18px rgba(209, 99, 26, 0.16); }
     .title span { color: var(--orange-600); }
     .subtitle { font-size: .8rem; margin-top: 6px; color: var(--ink-soft); }
-    .scores { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
-    .score-box { background: linear-gradient(180deg, var(--orange-500), var(--orange-700)); border-radius: 10px; padding: 8px 18px; text-align: center; min-width: 86px; box-shadow: 0 7px 0 #ad4600; }
+    .scores { display: flex; flex-direction: row; gap: 8px; align-items: stretch; flex-shrink: 0; }
+    .score-box { background: linear-gradient(180deg, var(--orange-500), var(--orange-700)); border-radius: 10px; padding: 8px 16px; text-align: center; min-width: 78px; box-shadow: 0 7px 0 #ad4600; }
     .score-box .label { display: block; font-size: 0.62rem; font-weight: 700; color: #eee4da; letter-spacing: 1px; margin-bottom: 2px; }
     .score-box .value { display: block; font-size: 1.35rem; font-weight: 900; color: #fff; }
 
-    .controls { width: 100%; display: flex; gap: 10px; margin-bottom: 18px; flex-wrap: wrap; justify-content: flex-end; }
+    .controls { width: 100%; display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; justify-content: center; }
     .btn { padding: 10px 20px; border: none; border-radius: 999px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: opacity .15s, transform .1s; }
     .btn:active { transform: scale(.96); }
     .btn-new { background: linear-gradient(180deg, var(--orange-500), var(--orange-700)); color: #fff; }
@@ -62,13 +62,13 @@
     .btn-submit:disabled { opacity: .45; cursor: not-allowed; }
     .btn:hover:not(:disabled) { opacity: .88; }
 
-    .play-area { display: flex; align-items: flex-end; gap: 14px; width: 100%; }
+    .play-area { display: flex; flex-direction: column; align-items: center; width: 100%; }
     .board-wrap {
       background: linear-gradient(145deg, #f3bf8d, #de8f4f);
-      border-radius: 8px;
-      padding: 10px;
-      flex: 1;
-      min-width: 0;
+      border-radius: 10px;
+      padding: 12px;
+      width: 100%;
+      max-width: 460px;
       aspect-ratio: 1;
       box-shadow: 0 20px 34px rgba(130, 64, 19, 0.25);
       touch-action: none;
@@ -77,6 +77,15 @@
       cursor: grab;
     }
     .board-wrap:active { cursor: grabbing; }
+    .play-hint {
+      margin-top: 12px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      color: var(--ink-soft);
+      text-align: center;
+      opacity: 0.72;
+      letter-spacing: 0.01em;
+    }
     .board { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); gap: 10px; width: 100%; height: 100%; }
     .cell { background: var(--tile-empty); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 900; transition: background .12s, color .12s, transform .1s; }
     .cell[data-v="2"]    { background:#fff0dd; color:#7a5a45; }
@@ -97,8 +106,9 @@
     .status-toast.err  { background: #f8d7da; color: #721c24; }
     .status-toast.warn { background: #fff3cd; color: #856404; }
 
-    .sphere-pill { width: 100%; font-size: 0.8rem; background: #fff0de; border-radius: 8px; padding: 9px 14px; color: #8a6a52; line-height: 1.6; border: 1px solid #f2d2ae; margin-bottom: 12px; }
+    .sphere-pill { width: 100%; font-size: 0.8rem; background: #fff0de; border-radius: 10px; padding: 10px 14px; color: #8a6a52; line-height: 1.5; border: 1px solid #f2d2ae; margin-bottom: 12px; }
     .sphere-pill strong { color: var(--ink); }
+    .wallet-stats { display: flex; flex-wrap: wrap; gap: 8px 20px; justify-content: space-between; align-items: center; }
 
     .overlay { display: none; position: fixed; inset: 0; background: rgba(255, 236, 216, 0.9); align-items: center; justify-content: center; z-index: 10; }
     .overlay.active { display: flex; }
@@ -147,26 +157,24 @@
     .deposit-loading p { font-size: 0.9rem; color: #7a6d61; margin: 0; }
     .deposit-error { background: #fef3f0; border: 1px solid #f5b89a; border-radius: 8px; padding: 10px 12px; font-size: 0.85rem; color: #c85a2d; display: flex; align-items: center; gap: 8px; }
 
-    .arrow-pad { display: grid; grid-template-areas: ". up ." "left down right"; grid-template-columns: 1fr 1fr 1fr; gap: 8px; flex-shrink: 0; width: 168px; padding-bottom: 4px; }
-    .arrow-pad button { width: 50px; height: 50px; border-radius: 8px; border: none; background: linear-gradient(180deg, var(--orange-500), var(--orange-700)); color: #fff; font-size: 1.35rem; cursor: pointer; justify-self: center; display: flex; align-items: center; justify-content: center; transition: background .1s, transform .1s; box-shadow: 0 4px 0 #ad4600; }
-    .arrow-pad button:active { background: #b54a00; transform: scale(.93); box-shadow: 0 2px 0 #ad4600; }
-    .arrow-pad .up { grid-area: up; }
-    .arrow-pad .left { grid-area: left; }
-    .arrow-pad .down { grid-area: down; }
-    .arrow-pad .right { grid-area: right; }
-
-    @media (max-width: 768px), (hover: none) and (pointer: coarse) {
-      .arrow-pad { display: none !important; }
-      .play-area { flex-direction: column; align-items: stretch; }
-      .board-wrap { width: 100%; cursor: default; }
+    @media (max-width: 480px) {
+      .title { font-size: 2.8rem; }
+      .scores { gap: 6px; }
+      .score-box { min-width: 68px; padding: 7px 12px; }
+      .score-box .value { font-size: 1.2rem; }
+      .controls { gap: 6px; }
+      .btn { padding: 9px 14px; font-size: 0.82rem; }
+      .board-wrap { padding: 10px; box-shadow: 0 12px 22px rgba(0,0,0,.16); }
+      .wallet-stats { flex-direction: column; align-items: flex-start; gap: 4px; }
     }
 
-    @media (max-width: 480px) {
-      .header { align-items: center; }
-      .title { font-size: 3rem; }
-      .controls { justify-content: space-between; }
-      .board-wrap { box-shadow: 0 12px 22px rgba(0,0,0,.16); }
-      .app-shell { max-width: 520px; }
+    @media (hover: none) and (pointer: coarse) {
+      .board-wrap { cursor: default; }
+      .play-hint .desktop-only { display: none; }
+    }
+
+    @media (hover: hover) and (pointer: fine) {
+      .play-hint .mobile-only { display: none; }
     }
 
     #walletInfo { display: none; }
@@ -204,7 +212,7 @@
 
     <!-- ── Wallet Balance Display ─────────────────────────────────────────── -->
     <div class="sphere-pill" id="walletInfo" style="display: none;">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
+      <div class="wallet-stats">
         <div>
           <strong>💰 Wallet Balance:</strong> <span id="walletBalance">0.00 UCT</span>
         </div>
@@ -219,20 +227,17 @@
     <!-- ── Status toast (errors/warnings only, above play area) ───────────── -->
     <div class="status-toast warn" id="statusToast" hidden aria-live="polite"></div>
 
-    <!-- ── Board + controls (side by side on desktop) ─────────────────────── -->
+    <!-- ── Game board ─────────────────────────────────────────────────────── -->
     <div class="play-area">
-      <div class="board-wrap" id="boardWrap" aria-label="Swipe to move tiles">
+      <div class="board-wrap" id="boardWrap" aria-label="Swipe or drag to move tiles">
         <div class="board" id="board">
           <!-- 16 cells rendered by ui.js -->
         </div>
       </div>
-
-      <div class="arrow-pad" aria-label="Move controls">
-        <button class="up"    data-dir="up" aria-label="Move up">↑</button>
-        <button class="left"  data-dir="left" aria-label="Move left">←</button>
-        <button class="down"  data-dir="down" aria-label="Move down">↓</button>
-        <button class="right" data-dir="right" aria-label="Move right">→</button>
-      </div>
+      <p class="play-hint">
+        <span class="desktop-only">Use arrow keys or drag on the board</span>
+        <span class="mobile-only">Swipe on the board to move</span>
+      </p>
     </div>
 
     <!-- ── Game-Over / Win Overlay ────────────────────────────────────────── -->

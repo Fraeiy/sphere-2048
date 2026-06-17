@@ -8,7 +8,7 @@
  *   • Manages a stable sessionId (stored in sessionStorage)
  *   • Fetches game state from Express API after each action
  *   • Renders the 4×4 board into the DOM
- *   • Handles keyboard (arrow keys) and on-screen button input
+ *   • Handles keyboard (arrow keys), swipe, and drag input on the board
  *   • Charges UCT per move or in batches
  *   • Submits final score to blockchain via /api/submit-score
  *   • Polls Sphere SDK status and shows it in status pill
@@ -332,7 +332,6 @@ async function syncPlayerBalanceFromServer() {
     syncGameDepositFromServer(current);
     currentMovesLeft = movesLeft || 0;
     updateBalanceDisplay();
-    updateMoveButtonStates();
     console.log(`[Balance] Current: ${current} UCT, Moves left: ${movesLeft}, Total deposited: ${totalDeposited} UCT`);
   }
 
@@ -389,7 +388,6 @@ async function registerPlayerWithGame(identity) {
       syncGameDepositFromServer(connectData.balance.current);
       currentMovesLeft = connectData.balance.movesLeft || 0;
       updateBalanceDisplay();
-      updateMoveButtonStates();
     } else {
       await syncPlayerBalanceFromServer();
     }
@@ -845,7 +843,6 @@ async function depositToPlay(depositAmount) {
                       currentMovesLeft = data.balance?.movesLeft || 0;
                     }
                     moveCount = 0; // Reset move count on new deposit
-                    updateMoveButtonStates(); // Re-enable move buttons
                     showMessage(`✅ Deposited ${depositAmount} ${COIN_ID}! In-game balance: ${gameDepositBalance.toFixed(2)} UCT. Moves available: ${currentMovesLeft}`, 'ok');
                     sessionStorage.setItem(DEPOSIT_KEY, 'true');
                     updateBalanceDisplay();
@@ -1218,34 +1215,7 @@ function renderBoard(board) {
 /** Whether the player has already submitted this game's score */
 let scoreSubmitted = false;
 
-/**
- * Updates the visual state of all move buttons based on game conditions.
- * Disables buttons when:
- *   - No wallet is connected
- *   - Game is over
- *   - No moves are left
- *   - A move request is in flight
- */
-function updateMoveButtonStates() {
-  const arrowPad = document.querySelector('.arrow-pad');
-  if (!arrowPad) return;
-  
-  const buttons = arrowPad.querySelectorAll('button[data-dir]');
-  const shouldDisable = !isConnected || currentMovesLeft <= 0 || moveRequestInFlight;
-  
-  buttons.forEach(btn => {
-    if (shouldDisable) {
-      btn.disabled = true;
-      btn.style.opacity = '0.5';
-      btn.style.cursor = 'not-allowed';
-    } else {
-      btn.disabled = false;
-      btn.style.opacity = '1';
-      btn.style.cursor = 'pointer';
-    }
-  });
-  
-}
+
 
 /**
  * Applies a full game state snapshot returned by the API:
@@ -1274,9 +1244,6 @@ function applyState(state) {
       );
     }
   }
-  
-  // Update button states based on available moves
-  updateMoveButtonStates();
   
   // Log balance info from state
   if (state.balance) {
@@ -1397,7 +1364,6 @@ async function newGame() {
     const state = await fetchNew();
     console.log('[Game] New game state received:', state);
     currentMovesLeft = state.balance?.movesLeft || 0;
-    updateMoveButtonStates();
     applyState(state);
   } catch (err) {
     showMessage(`Error: ${err.message}`, 'err');
@@ -1441,7 +1407,6 @@ async function doMove(direction) {
 
   // Set request lock
   moveRequestInFlight = true;
-  updateMoveButtonStates();
 
   try {
     console.log(`[Move] Making move: ${direction}, userId: ${userId}`);
@@ -1499,7 +1464,6 @@ async function doMove(direction) {
   } finally {
     // Always release the request lock
     moveRequestInFlight = false;
-    updateMoveButtonStates();
   }
 }
 
@@ -1532,12 +1496,42 @@ async function submitToChain() {
 // ─── Event Listeners ──────────────────────────────────────────────────────────
 
 const SWIPE_MIN_DISTANCE = 28;
-let touchStartX = 0;
-let touchStartY = 0;
-let touchTracking = false;
+let dragStartX = 0;
+let dragStartY = 0;
+let dragTracking = false;
+let dragOnBoard = false;
 
 /**
- * Shared gate for keyboard, desktop arrows, and mobile swipes.
+ * @param {number} startX
+ * @param {number} startY
+ * @param {number} endX
+ * @param {number} endY
+ * @returns {'left'|'right'|'up'|'down'|null}
+ */
+function directionFromDrag(startX, startY, endX, endY) {
+  const dx = endX - startX;
+  const dy = endY - startY;
+  const absX = Math.abs(dx);
+  const absY = Math.abs(dy);
+  if (Math.max(absX, absY) < SWIPE_MIN_DISTANCE) return null;
+  return absX > absY
+    ? (dx > 0 ? 'right' : 'left')
+    : (dy > 0 ? 'down' : 'up');
+}
+
+/**
+ * @param {number} endX
+ * @param {number} endY
+ */
+function finishDrag(endX, endY) {
+  if (!dragTracking) return;
+  dragTracking = false;
+  const direction = directionFromDrag(dragStartX, dragStartY, endX, endY);
+  if (direction) tryMove(direction);
+}
+
+/**
+ * Shared gate for keyboard, swipe, and drag input.
  * @returns {boolean}
  */
 function canAttemptMove() {
@@ -1575,58 +1569,46 @@ document.addEventListener('keydown', e => {
   }
 });
 
-/** Desktop arrow pad buttons */
-const arrowPad = document.querySelector('.arrow-pad');
-if (arrowPad) {
-  arrowPad.addEventListener('click', e => {
-    const btn = e.target.closest('[data-dir]');
-    if (btn) tryMove(btn.dataset.dir);
-  });
-}
-
-/** Mobile: swipe on board to move (like play2048.co) */
+/** Swipe (touch) and drag (mouse) on board to move */
 const boardWrapEl = document.getElementById('boardWrap');
 if (boardWrapEl) {
   boardWrapEl.addEventListener('touchstart', (e) => {
     if (e.touches.length !== 1) return;
-    touchTracking = true;
-    touchStartX = e.touches[0].clientX;
-    touchStartY = e.touches[0].clientY;
+    dragTracking = true;
+    dragStartX = e.touches[0].clientX;
+    dragStartY = e.touches[0].clientY;
   }, { passive: true });
 
   boardWrapEl.addEventListener('touchmove', (e) => {
-    if (!touchTracking || e.touches.length !== 1) return;
-    const dx = Math.abs(e.touches[0].clientX - touchStartX);
-    const dy = Math.abs(e.touches[0].clientY - touchStartY);
-    if (dx > 8 || dy > 8) {
-      e.preventDefault();
-    }
+    if (!dragTracking || e.touches.length !== 1) return;
+    const dx = Math.abs(e.touches[0].clientX - dragStartX);
+    const dy = Math.abs(e.touches[0].clientY - dragStartY);
+    if (dx > 8 || dy > 8) e.preventDefault();
   }, { passive: false });
 
   boardWrapEl.addEventListener('touchend', (e) => {
-    if (!touchTracking) return;
-    touchTracking = false;
-
     const touch = e.changedTouches[0];
     if (!touch) return;
-
-    const dx = touch.clientX - touchStartX;
-    const dy = touch.clientY - touchStartY;
-    const absX = Math.abs(dx);
-    const absY = Math.abs(dy);
-
-    if (Math.max(absX, absY) < SWIPE_MIN_DISTANCE) return;
-
-    const direction = absX > absY
-      ? (dx > 0 ? 'right' : 'left')
-      : (dy > 0 ? 'down' : 'up');
-
-    tryMove(direction);
+    finishDrag(touch.clientX, touch.clientY);
   }, { passive: true });
 
   boardWrapEl.addEventListener('touchcancel', () => {
-    touchTracking = false;
+    dragTracking = false;
   }, { passive: true });
+
+  boardWrapEl.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
+    dragOnBoard = true;
+    dragTracking = true;
+    dragStartX = e.clientX;
+    dragStartY = e.clientY;
+  });
+
+  window.addEventListener('mouseup', (e) => {
+    if (!dragOnBoard) return;
+    dragOnBoard = false;
+    finishDrag(e.clientX, e.clientY);
+  });
 }
 
 /** Wallet connection button */
@@ -1751,7 +1733,6 @@ function renderEmptyBoard() {
   ]);
   scoreEl.textContent = '0';
   bestEl.textContent = '0';
-  updateMoveButtonStates();
 }
 
 (async () => {
