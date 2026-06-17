@@ -1066,9 +1066,7 @@ const fetchLeaderboard = (limit = 100) => api(`/api/leaderboard?limit=${limit}`)
 const boardEl        = document.getElementById('board');
 const scoreEl        = document.getElementById('score');
 const bestEl         = document.getElementById('best');
-const messageEl      = document.getElementById('message');
-const messageTextEl  = document.getElementById('messageText');
-const spherePillEl   = document.getElementById('spherePill');
+const statusToastEl  = document.getElementById('statusToast');
 const overlayEl      = document.getElementById('overlay');
 const overlayTitleEl = document.getElementById('overlayTitle');
 const overlayMsgEl   = document.getElementById('overlayMsg');
@@ -1247,13 +1245,6 @@ function updateMoveButtonStates() {
     }
   });
   
-  // Also disable keyboard if no moves
-  if (currentMovesLeft <= 0 && !moveRequestInFlight) {
-    // Show feedback to user
-    if (currentMovesLeft === 0) {
-      showMessage('❌ No moves left. Please deposit more tokens to continue.', 'err');
-    }
-  }
 }
 
 /**
@@ -1319,53 +1310,44 @@ function applyState(state) {
 
 // ─── Message Display ──────────────────────────────────────────────────────────
 
+let statusToastTimer = null;
+
 /**
- * Shows a status message below the board.
+ * Shows a compact toast above the board for important feedback only.
+ * Routine gameplay status (score/moves) is omitted — see header counters.
  * @param {string} text
  * @param {'ok'|'err'|'warn'|''} type
  */
 function showMessage(text, type = '') {
-  messageEl.className  = `message ${type}`.trim();
-  messageTextEl.textContent = text;
+  if (!statusToastEl || !text) return;
+
+  const isRoutineGameplay =
+    type === '' ||
+    (type === 'ok' && (/^Score:/i.test(text) || /^Use arrow keys/i.test(text) || /^Loading game/i.test(text)));
+
+  if (isRoutineGameplay) return;
+
+  statusToastEl.hidden = false;
+  statusToastEl.className = `status-toast ${type || 'warn'}`.trim();
+  statusToastEl.textContent = text;
+
+  if (statusToastTimer) clearTimeout(statusToastTimer);
+  const duration = type === 'err' ? 7000 : 4500;
+  statusToastTimer = setTimeout(() => {
+    statusToastEl.hidden = true;
+    statusToastEl.textContent = '';
+  }, duration);
 }
 
 // ─── Sphere Status Pill ───────────────────────────────────────────────────────
 
-/** Renders the Sphere SDK connection status into the bottom pill. */
-function renderSphereStatus(status) {
-  const wallet = status.wallet || status.treasury || {};
-  const chainConnected = status.chain?.connected;
-  const connected = Boolean(status.connected || chainConnected);
-
-  spherePillEl.textContent = '';
-
-  const label = document.createElement('strong');
-  label.textContent = '⛓ Sphere:';
-  spherePillEl.appendChild(label);
-
-  if (!connected) {
-    spherePillEl.appendChild(document.createTextNode(' Treasury not configured — deposits disabled.'));
-    return;
-  }
-
-  const network = wallet.network || status.chain?.network || 'testnet';
-  spherePillEl.appendChild(document.createTextNode(` Connected to Unicity (${network})`));
-  if (wallet.nametag) spherePillEl.appendChild(document.createTextNode(` · @${wallet.nametag}`));
-  const address = wallet.address || status.chain?.l1Address;
-  if (address) spherePillEl.appendChild(document.createTextNode(` · ${address.slice(0, 20)}…`));
-  if (chainConnected) {
-    spherePillEl.appendChild(document.createTextNode(' · on-chain batches enabled'));
-  }
-}
-
-/** Polls Sphere status every 5 seconds until connected, then every 30 seconds. */
+/** Sphere chain status is polled silently (no on-screen pill). */
 async function pollSphereStatus() {
   try {
-    const status = await fetchSphereStatus();
-    renderSphereStatus(status);
-    setTimeout(pollSphereStatus, status.connected ? 30_000 : 5_000);
+    await fetchSphereStatus();
+    setTimeout(pollSphereStatus, 60_000);
   } catch {
-    setTimeout(pollSphereStatus, 10_000);
+    setTimeout(pollSphereStatus, 60_000);
   }
 }
 
@@ -1410,16 +1392,13 @@ async function newGame() {
   moveCount = 0;
   scoreSubmitted = false;
   overlayEl.classList.remove('active');
-  showMessage('Starting new game…');
   try {
     console.log('[Game] Calling fetchNew for userId:', userId);
     const state = await fetchNew();
     console.log('[Game] New game state received:', state);
-    // Update moves tracking
     currentMovesLeft = state.balance?.movesLeft || 0;
     updateMoveButtonStates();
     applyState(state);
-    showMessage(`Use arrow keys or buttons to move tiles. Moves left: ${state.balance?.movesLeft ?? '?'}`);
   } catch (err) {
     showMessage(`Error: ${err.message}`, 'err');
     console.error('[Game] newGame failed:', err);
@@ -1488,27 +1467,9 @@ async function doMove(direction) {
       console.log(`[Move] Synced moves: ${currentMovesLeft}`);
     }
 
-    if (state.moveBatch?.queued) {
-      showMessage(
-        `⛓ Queued ${state.moveBatch.count} moves for on-chain batch (${state.moveBatch.moveHash?.slice(0, 12) || 'pending'}…)`,
-        'ok'
-      );
-    }
-    
     if (!state.moved) {
       showMessage('No tiles moved — try another direction.', 'warn');
     } else {
-      const movesLeft = state.balance?.movesLeft ?? '?';
-      showMessage(
-        state.gameOver
-          ? `Game over! Final score: ${state.score}. Moves left: ${movesLeft}`
-          : state.won
-            ? `🎉 You reached 2048! Score: ${state.score}. Moves left: ${movesLeft}`
-            : `Score: ${state.score}. Moves left: ${movesLeft}`,
-        state.gameOver ? 'err' : state.won ? 'ok' : ''
-      );
-
-      // Check if moves reached 0 after this move
       if (currentMovesLeft === 0 && state.score > 0 && !scoreSubmitted) {
         console.log('[Move] Moves reached 0 after this move. Auto-saving score...');
         autoSubmitScore(state.score, state.board).catch(err => 
@@ -1742,11 +1703,10 @@ function renderEmptyBoard() {
 }
 
 (async () => {
-  showMessage('Loading game…');
   renderEmptyBoard();
 
   if (!isConnected) {
-    showMessage('⚠️  Connect your Sphere wallet and deposit UCT to start playing.', 'warn');
+    showMessage('Connect your Sphere wallet and deposit UCT to start playing.', 'warn');
   }
 
   pollSphereStatus();
