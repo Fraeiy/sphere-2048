@@ -916,11 +916,15 @@ async function chargeMoveToWallet() {
 function updateBalanceDisplay() {
   const balanceEl = document.getElementById('walletBalance');
   const depositEl = document.getElementById('gameDeposit');
+  const movesEl = document.getElementById('gameMoves');
   if (balanceEl) {
     balanceEl.textContent = `${uctBalance !== null ? uctBalance.toFixed(2) : '0.00'} UCT`;
   }
   if (depositEl) {
     depositEl.textContent = `${gameDepositBalance.toFixed(2)} UCT`;
+  }
+  if (movesEl) {
+    movesEl.textContent = String(Math.max(0, currentMovesLeft));
   }
 }
 
@@ -1088,28 +1092,41 @@ function shortWalletId(value) {
   return `${value.slice(0, 10)}…${value.slice(-8)}`;
 }
 
+function normalizeLeaderboardEntry(item, index) {
+  return {
+    rank: item.rank ?? index + 1,
+    walletId: item.walletId ?? item.wallet_id ?? item.userId ?? item.user_id ?? 'Unknown',
+    highScore: Number(item.highScore ?? item.high_score ?? item.score ?? 0),
+    totalMoves: Number(item.totalMoves ?? item.total_moves ?? item.moves_used ?? 0),
+    gameCount: Number(item.gameCount ?? item.game_count ?? 0),
+  };
+}
+
 function renderLeaderboardRows(entries) {
   if (!leaderboardBodyEl) return;
 
-  // Header with column info
+  const normalized = (Array.isArray(entries) ? entries : [])
+    .map(normalizeLeaderboardEntry)
+    .filter((item) => item.highScore > 0 && item.walletId !== 'Unknown');
+
   let html = '<div class="leaderboard-row header"><div>Rank</div><div>Player</div><div style="text-align:right;">High Score</div><div style="text-align:right;">Moves</div><div style="text-align:right;">Games</div></div>';
 
-  if (!entries.length) {
+  if (!normalized.length) {
     html += '<div class="leaderboard-empty">🎮 No games played yet. Start playing to appear on the leaderboard!</div>';
     leaderboardBodyEl.innerHTML = html;
     return;
   }
 
-  // Build all HTML at once with rank badges for top 3
-  for (const item of entries) {
+  normalized.forEach((item, index) => {
+    const rank = index + 1;
     const playerName = shortWalletId(item.walletId);
-    let rankBadge = `#${item.rank}`;
-    if (item.rank === 1) rankBadge = '🥇';
-    else if (item.rank === 2) rankBadge = '🥈';
-    else if (item.rank === 3) rankBadge = '🥉';
-    
-    html += `<div class="leaderboard-row" data-rank="${item.rank}"><div class="leaderboard-rank">${rankBadge}</div><div class="leaderboard-player" title="${item.walletId}">${playerName}</div><div class="leaderboard-score">${item.highScore ?? 0}</div><div class="leaderboard-moves">${item.totalMoves ?? 0}</div><div style="text-align:right;">${item.gameCount ?? 0}</div></div>`;
-  }
+    let rankBadge = `#${rank}`;
+    if (rank === 1) rankBadge = '🥇';
+    else if (rank === 2) rankBadge = '🥈';
+    else if (rank === 3) rankBadge = '🥉';
+
+    html += `<div class="leaderboard-row" data-rank="${rank}"><div class="leaderboard-rank">${rankBadge}</div><div class="leaderboard-player" title="${item.walletId}">${playerName}</div><div class="leaderboard-score">${item.highScore}</div><div class="leaderboard-moves">${item.totalMoves}</div><div style="text-align:right;">${item.gameCount || 1}</div></div>`;
+  });
 
   leaderboardBodyEl.innerHTML = html;
 }
@@ -1258,7 +1275,7 @@ function applyState(state) {
   currentScore = state.score;
   if (state.balance?.movesLeft !== undefined) {
     currentMovesLeft = state.balance.movesLeft;
-    // CRITICAL: Auto-save score when moves reach 0
+    updateBalanceDisplay();
     if (currentMovesLeft === 0 && state.score > 0 && !scoreSubmitted) {
       console.log('[State] Moves reached 0. Auto-saving score...');
       autoSubmitScore(state.score, state.board).catch(err => 

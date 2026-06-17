@@ -149,34 +149,47 @@ export async function addDeposit(userId, amount, txHash = null) {
 }
 
 /**
- * Deduct move cost from user balance
+ * Deduct move cost from user balance (atomic units — source of truth)
  */
-export async function deductMove(userId) {
+export async function deductMove(userId, direction = 'unknown', score = 0) {
   const userKey = `user:${userId}`;
   const user = await getOrCreateUser(userId);
+  const MOVE_COST_ATOMIC = 100000000000000000;
 
-  if (user.moves_left <= 0) {
-    return false;
+  if ((user.balance || 0) < MOVE_COST_ATOMIC) {
+    return null;
   }
 
-  const now = Date.now();
-  
+  const ts = Date.now();
+  user.balance -= MOVE_COST_ATOMIC;
+  user.total_moves = (user.total_moves || 0) + 1;
+  user.moves_left = Math.floor(user.balance / MOVE_COST_ATOMIC);
+  user.last_move = ts;
+  user.updated_at = ts;
+
   if (IN_MEMORY) {
-    user.moves_left -= 1;
-    user.total_moves += 1;
-    user.last_move = now;
-    user.updated_at = now;
     memoryStore.users.set(userId, user);
+    if (!memoryStore.moves.has(userId)) memoryStore.moves.set(userId, []);
+    memoryStore.moves.get(userId).push({
+      move_number: user.total_moves,
+      direction,
+      score_after: score,
+      created_at: ts,
+    });
   } else {
-    user.moves_left -= 1;
-    user.total_moves += 1;
-    user.last_move = now;
-    user.updated_at = now;
     await kv.set(userKey, user);
+    const moveKey = `move:${userId}:${ts}`;
+    await kv.set(moveKey, {
+      user_id: userId,
+      move_number: user.total_moves,
+      direction,
+      score_after: score,
+      created_at: ts,
+    });
   }
 
-  console.log(`[DB] Move deducted: ${userId} (moves_left: ${user.moves_left})`);
-  return true;
+  console.log(`[DB] Move deducted: ${userId} (balance: ${user.balance})`);
+  return user;
 }
 
 /**
@@ -305,12 +318,18 @@ export async function getLeaderboard(limit = 10) {
     .sort((a, b) => b.high_score - a.high_score)
     .slice(0, limit);
   
-  return sorted.map((user, index) => ({
-    rank: index + 1,
-    wallet_id: user.wallet_id || user.user_id,
-    high_score: user.high_score,
-    total_moves: user.total_moves
-  }));
+  return sorted
+    .filter((user) => user.high_score > 0)
+    .map((user, index) => ({
+      rank: index + 1,
+      userId: user.user_id,
+      walletId: user.wallet_id || user.user_id,
+      highScore: user.high_score || 0,
+      totalMoves: user.total_moves || 0,
+      totalDeposited: user.total_deposited || 0,
+      gameCount: 1,
+      avgScore: user.high_score || 0,
+    }));
 }
 
 /**

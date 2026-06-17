@@ -1,53 +1,74 @@
 /**
  * db-redis.js — Redis Database Module
  *
- * Provides persistent data storage using Redis (for production/Vercel)
- * Falls back to in-memory Map when Redis is unavailable (local development)
- *
- * ┌─────────────────────────────────────────────────────────────────┐
- * │ PRODUCTION: Redis (persistent across requests/restarts)         │
- * │ DEVELOPMENT: In-memory Map (SQLite db.js preferred instead)     │
- * └─────────────────────────────────────────────────────────────────┘
- *
- * API matches db.js exactly for seamless import switching.
+ * Mirrors db.js API exactly so production (Vercel + Redis) behaves like local SQLite.
  */
 
 import { createClient } from 'redis';
 
-// ─── Configuration ────────────────────────────────────────────────────────────
-
 const REDIS_URL = process.env.REDIS_URL || '';
 const USE_REDIS = !!REDIS_URL;
 const IN_MEMORY = !USE_REDIS;
+const MOVE_COST_ATOMIC = 100000000000000000; // 0.1 UCT
 
-// In-memory fallback storage (Map format for fast lookups)
 const inMemoryStore = new Map();
-
-// Redis client (initialized on demand)
 let redisClient = null;
 
-// ─── Initialization ───────────────────────────────────────────────────────────
+function now() {
+  return Date.now();
+}
+
+function createUserRecord(userId, walletId = null) {
+  const ts = now();
+  return {
+    user_id: userId,
+    wallet_id: walletId || userId,
+    balance: 0,
+    total_deposited: 0,
+    moves_left: 0,
+    total_moves: 0,
+    high_score: 0,
+    last_move: null,
+    created_at: ts,
+    updated_at: ts,
+  };
+}
+
+async function readUser(userId) {
+  const key = `user:${userId}`;
+  if (IN_MEMORY) {
+    return inMemoryStore.get(key) || null;
+  }
+  const raw = await redisClient.get(key);
+  return raw ? JSON.parse(raw) : null;
+}
+
+async function writeUser(user) {
+  const key = `user:${user.user_id}`;
+  user.updated_at = now();
+  if (IN_MEMORY) {
+    inMemoryStore.set(key, user);
+    return user;
+  }
+  await redisClient.set(key, JSON.stringify(user));
+  return user;
+}
 
 export async function initDatabase() {
   if (USE_REDIS) {
     try {
       redisClient = createClient({ url: REDIS_URL });
       redisClient.on('error', (err) => console.error('[DB] Redis error:', err));
-      
       await redisClient.connect();
       await redisClient.ping();
-      
       console.log('[DB] ✅ Connected to Redis');
       return true;
     } catch (err) {
-      console.warn('[DB] ⚠️  Redis connection failed, using in-memory storage:', err.message);
+      console.warn('[DB] ⚠️  Redis connection failed:', err.message);
       redisClient = null;
     }
   }
-  
-  if (IN_MEMORY) {
-    console.log('[DB] Using in-memory storage (NOT PERSISTENT - local dev only)');
-  }
+  console.log('[DB] Using in-memory storage (local fallback)');
 }
 
 export async function closeDatabase() {
@@ -57,322 +78,282 @@ export async function closeDatabase() {
   }
 }
 
-// ─── User Data ────────────────────────────────────────────────────────────────
-
-/**
- * Get or create a user record.
- * @param {string} userId - User identifier (wallet address, account ID, etc.)
- * @param {string} walletId - Optional wallet identifier
- * @returns {Object} User data {userId, walletId, balance, moves_left, high_score}
- */
 export async function getOrCreateUser(userId, walletId = null) {
-  const key = `user:${userId}`;
-  
-  if (IN_MEMORY) {
-    if (!inMemoryStore.has(key)) {
-      inMemoryStore.set(key, {
-        userId,
-        walletId: walletId || userId,
-        balance: 0,
-        moves_left: 0,
-        high_score: 0,
-        created_at: Date.now(),
-        last_updated: Date.now(),
-      });
-    }
-    return inMemoryStore.get(key);
+  let user = await readUser(userId);
+  if (!user) {
+    user = createUserRecord(userId, walletId);
+    await writeUser(user);
+  } else if (walletId && user.wallet_id !== walletId) {
+    user.wallet_id = walletId;
+    await writeUser(user);
   }
-  
-  // Redis mode
-  try {
-    const existing = await redisClient.get(key);
-    
-    if (existing) {
-      return JSON.parse(existing);
-    }
-    
-    const userData = {
-      userId,
-      walletId: walletId || userId,
-      balance: 0,
-      moves_left: 0,
-      high_score: 0,
-      created_at: Date.now(),
-      last_updated: Date.now(),
-    };
-    
-    await redisClient.set(key, JSON.stringify(userData));
-    return userData;
-  } catch (err) {
-    console.error('[DB] Error in getOrCreateUser:', err.message);
-    throw err;
-  }
+  return user;
 }
 
-/**
- * Get user balance and stats.
- * @param {string} userId - User identifier
- * @returns {Object} User stats {userId, balance, moves_left, high_score}
- */
 export async function getUserStats(userId) {
-  const key = `user:${userId}`;
-  
-  if (IN_MEMORY) {
-    const user = inMemoryStore.get(key);
-    return user || { userId, balance: 0, moves_left: 0, high_score: 0 };
+  const user = await readUser(userId);
+  if (!user) {
+    return null;
   }
-  
-  try {
-    const userJson = await redisClient.get(key);
-    if (!userJson) {
-      return { userId, balance: 0, moves_left: 0, high_score: 0 };
-    }
-    return JSON.parse(userJson);
-  } catch (err) {
-    console.error('[DB] Error in getUserStats:', err.message);
-    throw err;
-  }
+
+  return {
+    user_id: user.user_id,
+    wallet_id: user.wallet_id,
+    balance: user.balance || 0,
+    moves_left: user.moves_left || 0,
+    high_score: user.high_score || 0,
+    total_moves: user.total_moves || 0,
+    total_deposited: user.total_deposited || 0,
+    created_at: user.created_at,
+    updated_at: user.updated_at,
+  };
 }
 
-/**
- * Add a deposit and update user balance.
- * @param {string} userId - User identifier
- * @param {number} amountAtomic - Deposit amount in atomic units (e.g., satoshis)
- * @param {string} txHash - Transaction hash
- * @returns {Object} Updated user data
- */
-export async function addDeposit(userId, amountAtomic, txHash) {
-  const userKey = `user:${userId}`;
-  const depositKey = `deposit:${userId}:${txHash}`;
-  
+export async function addDeposit(userId, amountAtomic, txHash = null) {
+  const user = await getOrCreateUser(userId);
+  const ts = now();
+
+  user.balance = (user.balance || 0) + amountAtomic;
+  user.total_deposited = (user.total_deposited || 0) + amountAtomic;
+  user.moves_left = Math.floor(user.balance / MOVE_COST_ATOMIC);
+  await writeUser(user);
+
+  const depositRecord = {
+    user_id: userId,
+    wallet_id: user.wallet_id,
+    amount: amountAtomic,
+    tx_hash: txHash || 'manual',
+    verified: 1,
+    deposit_date: ts,
+    created_at: ts,
+  };
+
+  const depositKey = `deposit:${userId}:${ts}`;
   if (IN_MEMORY) {
-    let user = inMemoryStore.get(userKey);
-    if (!user) {
-      user = await getOrCreateUser(userId);
-    }
-    
-    // Add moves: 1 move per 0.1 tokens (or 1 move minimum)
-    const movesAdded = Math.max(1, Math.floor(amountAtomic / 100000)); // Assuming 1 atomic = 0.00001 units
-    user.balance += amountAtomic;
-    user.moves_left += movesAdded;
-    user.last_updated = Date.now();
-    
-    inMemoryStore.set(userKey, user);
-    inMemoryStore.set(depositKey, {
-      userId,
-      amount: amountAtomic,
-      moves: movesAdded,
-      tx_hash: txHash,
-      timestamp: Date.now(),
-    });
-    
-    return user;
+    inMemoryStore.set(depositKey, depositRecord);
+  } else {
+    await redisClient.set(depositKey, JSON.stringify(depositRecord));
+    await redisClient.rPush(`deposits:${userId}`, depositKey);
   }
-  
-  // Redis mode
-  try {
-    let userJson = await redisClient.get(userKey);
-    let user = userJson ? JSON.parse(userJson) : await getOrCreateUser(userId);
-    
-    const movesAdded = Math.max(1, Math.floor(amountAtomic / 100000));
-    user.balance += amountAtomic;
-    user.moves_left += movesAdded;
-    user.last_updated = Date.now();
-    
-    await redisClient.set(userKey, JSON.stringify(user));
-    await redisClient.set(depositKey, JSON.stringify({
-      userId,
-      amount: amountAtomic,
-      moves: movesAdded,
-      tx_hash: txHash,
-      timestamp: Date.now(),
-    }));
-    
-    return user;
-  } catch (err) {
-    console.error('[DB] Error in addDeposit:', err.message);
-    throw err;
-  }
+
+  console.log(`[DB] Deposit: ${userId} +${(amountAtomic / 1e18).toFixed(2)} UCT`);
+  return getOrCreateUser(userId);
 }
 
-/**
- * Deduct a move from user's moves_left.
- * @param {string} userId - User identifier
- * @returns {Object} Updated user data
- */
-export async function deductMove(userId) {
-  const userKey = `user:${userId}`;
-  
+export async function deductMove(userId, direction = 'unknown', score = 0) {
+  const user = await getOrCreateUser(userId);
+
+  if ((user.balance || 0) < MOVE_COST_ATOMIC) {
+    console.log(`[DB] Insufficient balance for move: ${userId}`);
+    return null;
+  }
+
+  const ts = now();
+  user.balance -= MOVE_COST_ATOMIC;
+  user.total_moves = (user.total_moves || 0) + 1;
+  user.moves_left = Math.floor(user.balance / MOVE_COST_ATOMIC);
+  user.last_move = ts;
+  await writeUser(user);
+
+  const moveRecord = {
+    user_id: userId,
+    move_number: user.total_moves,
+    direction,
+    score_after: score,
+    created_at: ts,
+  };
+
+  const moveKey = `move:${userId}:${ts}`;
   if (IN_MEMORY) {
-    let user = inMemoryStore.get(userKey);
-    if (!user) {
-      user = await getOrCreateUser(userId);
-    }
-    
-    if (user.moves_left > 0) {
-      user.moves_left -= 1;
-      user.last_updated = Date.now();
-      inMemoryStore.set(userKey, user);
-    }
-    
-    return user;
+    inMemoryStore.set(moveKey, moveRecord);
+  } else {
+    await redisClient.set(moveKey, JSON.stringify(moveRecord));
+    await redisClient.rPush(`moves:${userId}`, moveKey);
   }
-  
-  // Redis mode
-  try {
-    let userJson = await redisClient.get(userKey);
-    let user = userJson ? JSON.parse(userJson) : await getOrCreateUser(userId);
-    
-    if (user.moves_left > 0) {
-      user.moves_left -= 1;
-      user.last_updated = Date.now();
-      await redisClient.set(userKey, JSON.stringify(user));
-    }
-    
-    return user;
-  } catch (err) {
-    console.error('[DB] Error in deductMove:', err.message);
-    throw err;
-  }
+
+  console.log(`[DB] Move: ${userId} dir=${direction} balance=${user.balance}`);
+  return readUser(userId);
 }
 
-/**
- * Submit a game score.
- * @param {string} userId - User identifier
- * @param {number} score - Final score
- * @param {number} movesUsed - Number of moves used
- * @returns {Object} Score record
- */
 export async function submitScore(userId, score, movesUsed = 0) {
-  const scoreKey = `score:${userId}:${Date.now()}`;
-  const userKey = `user:${userId}`;
-  
-  const scoreData = {
-    userId,
+  const user = await getOrCreateUser(userId);
+  const ts = now();
+
+  if (score > (user.high_score || 0)) {
+    user.high_score = score;
+    await writeUser(user);
+  }
+
+  const scoreRecord = {
+    user_id: userId,
+    wallet_id: user.wallet_id,
     score,
     moves_used: movesUsed,
-    timestamp: Date.now(),
+    timestamp: ts,
   };
-  
+
+  const scoreKey = `score:${userId}:${ts}`;
   if (IN_MEMORY) {
-    inMemoryStore.set(scoreKey, scoreData);
-    
-    // Update high score if applicable
-    let user = inMemoryStore.get(userKey);
-    if (!user) {
-      user = await getOrCreateUser(userId);
-    }
-    if (score > user.high_score) {
-      user.high_score = score;
-      user.last_updated = Date.now();
-      inMemoryStore.set(userKey, user);
-    }
-    
-    return scoreData;
+    inMemoryStore.set(scoreKey, scoreRecord);
+  } else {
+    await redisClient.set(scoreKey, JSON.stringify(scoreRecord));
+    await redisClient.rPush(`scores:${userId}`, scoreKey);
   }
-  
-  // Redis mode
-  try {
-    await redisClient.set(scoreKey, JSON.stringify(scoreData));
-    
-    // Update high score
-    let userJson = await redisClient.get(userKey);
-    let user = userJson ? JSON.parse(userJson) : await getOrCreateUser(userId);
-    
-    if (score > user.high_score) {
-      user.high_score = score;
-      user.last_updated = Date.now();
-      await redisClient.set(userKey, JSON.stringify(user));
-    }
-    
-    return scoreData;
-  } catch (err) {
-    console.error('[DB] Error in submitScore:', err.message);
-    throw err;
-  }
+
+  return scoreRecord;
 }
 
-/**
- * Get leaderboard (top scores).
- * @param {number} limit - Number of top scores to return
- * @returns {Array} Array of top scores [{userId, score, moves_used, timestamp}, ...]
- */
 export async function getLeaderboard(limit = 10) {
+  const users = [];
+
   if (IN_MEMORY) {
-    const scores = [];
     for (const [key, value] of inMemoryStore.entries()) {
-      if (key.startsWith('score:')) {
-        scores.push(value);
+      if (key.startsWith('user:') && value?.high_score > 0) {
+        users.push(value);
       }
     }
-    return scores
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
-  }
-  
-  // Redis mode (simplified - returns recent scores)
-  try {
-    const keys = await redisClient.keys('score:*');
-    const scores = [];
-    
-    for (const key of keys.slice(0, limit * 2)) {
-      const scoreJson = await redisClient.get(key);
-      if (scoreJson) {
-        scores.push(JSON.parse(scoreJson));
+  } else {
+    const keys = await redisClient.keys('user:*');
+    for (const key of keys) {
+      const raw = await redisClient.get(key);
+      if (!raw) continue;
+      const user = JSON.parse(raw);
+      if (user.high_score > 0) {
+        users.push(user);
       }
     }
-    
-    return scores
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit);
-  } catch (err) {
-    console.error('[DB] Error in getLeaderboard:', err.message);
-    return [];
   }
+
+  return users
+    .sort((a, b) => {
+      if (b.high_score !== a.high_score) return b.high_score - a.high_score;
+      return (b.total_moves || 0) - (a.total_moves || 0);
+    })
+    .slice(0, limit)
+    .map((user, index) => ({
+      rank: index + 1,
+      userId: user.user_id,
+      walletId: user.wallet_id || user.user_id,
+      highScore: user.high_score || 0,
+      totalMoves: user.total_moves || 0,
+      totalDeposited: user.total_deposited || 0,
+      gameCount: 1,
+      avgScore: user.high_score || 0,
+    }));
 }
 
-/**
- * Get database statistics.
- * @returns {Object} Database stats {total_users, total_deposits, total_moves, total_scores}
- */
+export async function getDepositHistory(userId) {
+  const deposits = [];
+
+  if (IN_MEMORY) {
+    for (const [key, value] of inMemoryStore.entries()) {
+      if (key.startsWith(`deposit:${userId}:`)) deposits.push(value);
+    }
+  } else {
+    const keys = await redisClient.lRange(`deposits:${userId}`, 0, -1);
+    for (const key of keys) {
+      const raw = await redisClient.get(key);
+      if (raw) deposits.push(JSON.parse(raw));
+    }
+  }
+
+  return deposits
+    .sort((a, b) => b.created_at - a.created_at)
+    .map((d) => ({
+      id: d.created_at,
+      amountAtomic: d.amount,
+      amountUCT: (d.amount / 1e18).toFixed(6),
+      txHash: d.tx_hash,
+      verified: Boolean(d.verified),
+      depositDate: new Date(d.deposit_date || d.created_at).toISOString(),
+      timestamp: d.created_at,
+    }));
+}
+
+export async function getMoveHistory(userId, limit = 50) {
+  const moves = [];
+
+  if (IN_MEMORY) {
+    for (const [key, value] of inMemoryStore.entries()) {
+      if (key.startsWith(`move:${userId}:`)) moves.push(value);
+    }
+  } else {
+    const keys = await redisClient.lRange(`moves:${userId}`, 0, -1);
+    for (const key of keys.slice(-limit)) {
+      const raw = await redisClient.get(key);
+      if (raw) moves.push(JSON.parse(raw));
+    }
+  }
+
+  return moves
+    .sort((a, b) => b.created_at - a.created_at)
+    .slice(0, limit)
+    .map((m) => ({
+      id: m.created_at,
+      moveNumber: m.move_number,
+      direction: m.direction,
+      scoreAfter: m.score_after,
+      timestamp: m.created_at,
+      date: new Date(m.created_at).toISOString(),
+    }));
+}
+
+export async function verifyBalanceFromHistory(userId) {
+  const user = await getOrCreateUser(userId);
+  const deposits = await getDepositHistory(userId);
+  const moves = await getMoveHistory(userId, 10000);
+
+  const totalDeposited = deposits.reduce((sum, d) => sum + d.amountAtomic, 0);
+  const moveCount = moves.length;
+  const totalSpent = moveCount * MOVE_COST_ATOMIC;
+  const calculatedBalance = totalDeposited - totalSpent;
+  const storedBalance = user.balance || 0;
+
+  return {
+    storedBalance,
+    calculatedBalance,
+    isValid: storedBalance === calculatedBalance,
+    discrepancy: storedBalance - calculatedBalance,
+    totalDeposited,
+    totalDepositsUCT: (totalDeposited / 1e18).toFixed(6),
+    moveCount,
+    totalSpent,
+    totalSpentUCT: (totalSpent / 1e18).toFixed(6),
+    depositRecords: deposits.length,
+    moveRecords: moveCount,
+  };
+}
+
 export async function getDatabaseStats() {
   if (IN_MEMORY) {
     let totalUsers = 0;
     let totalDeposits = 0;
     let totalScores = 0;
-    
     for (const key of inMemoryStore.keys()) {
       if (key.startsWith('user:')) totalUsers++;
       if (key.startsWith('deposit:')) totalDeposits++;
       if (key.startsWith('score:')) totalScores++;
     }
-    
     return {
       storage_type: 'in-memory',
       total_users: totalUsers,
       total_deposits: totalDeposits,
       total_scores: totalScores,
-      records_in_memory: inMemoryStore.size,
       connected: true,
     };
   }
-  
-  // Redis mode
-  try {
-    const userKeys = await redisClient.keys('user:*');
-    const depositKeys = await redisClient.keys('deposit:*');
-    const scoreKeys = await redisClient.keys('score:*');
-    
-    return {
-      storage_type: 'Redis',
-      total_users: userKeys.length,
-      total_deposits: depositKeys.length,
-      total_scores: scoreKeys.length,
-      redis_url: REDIS_URL.replace(/:[^:]*@/, ':***@'), // Mask password
-      connected: redisClient && redisClient.isOpen,
-    };
-  } catch (err) {
-    console.error('[DB] Error in getDatabaseStats:', err.message);
-    return { error: err.message };
-  }
+
+  const [userKeys, depositKeys, scoreKeys] = await Promise.all([
+    redisClient.keys('user:*'),
+    redisClient.keys('deposit:*'),
+    redisClient.keys('score:*'),
+  ]);
+
+  return {
+    storage_type: 'Redis',
+    total_users: userKeys.length,
+    total_deposits: depositKeys.length,
+    total_scores: scoreKeys.length,
+    connected: Boolean(redisClient?.isOpen),
+  };
 }

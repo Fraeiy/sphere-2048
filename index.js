@@ -280,6 +280,29 @@ function startSessionCleanup() {
 
 const MOVE_BATCH_SIZE = 5;
 
+/**
+ * Normalizes leaderboard rows from any DB adapter into a stable API shape.
+ * @param {object[]} rows
+ * @returns {object[]}
+ */
+function normalizeLeaderboard(rows) {
+  if (!Array.isArray(rows)) return [];
+
+  return rows
+    .map((row, index) => ({
+      rank: row.rank ?? index + 1,
+      userId: row.userId ?? row.user_id ?? null,
+      walletId: row.walletId ?? row.wallet_id ?? row.userId ?? row.user_id ?? 'Unknown',
+      highScore: Number(row.highScore ?? row.high_score ?? row.score ?? 0),
+      totalMoves: Number(row.totalMoves ?? row.total_moves ?? row.moves_used ?? 0),
+      totalDeposited: Number(row.totalDeposited ?? row.total_deposited ?? 0),
+      gameCount: Number(row.gameCount ?? row.game_count ?? (row.score != null ? 1 : 0)),
+      avgScore: Number(row.avgScore ?? row.avg_score ?? row.highScore ?? row.high_score ?? row.score ?? 0),
+    }))
+    .filter((row) => row.highScore > 0 && row.walletId !== 'Unknown')
+    .map((row, index) => ({ ...row, rank: index + 1 }));
+}
+
 function pushMoveForBatch(userId, moveData) {
   const buffer = userMoveBuffers.get(userId) ?? [];
   buffer.push(moveData);
@@ -1092,8 +1115,9 @@ app.post('/api/submit-score', async (req, res) => {
     
     // CRITICAL: Always save the score to prevent loss
     if (finalScore > 0) {
-      // Save to persistent database
       await db.submitScore(userId, finalScore, movesUsed || 0);
+      leaderboardCache.data = null;
+      leaderboardCache.timestamp = 0;
       console.log(`[Score] Submitted score ${finalScore} for ${userId}`);
     }
 
@@ -1150,18 +1174,17 @@ app.get('/api/leaderboard', limiters.leaderboard, async (req, res) => {
       });
     }
 
-    // Fetch from persistent database
-    const leaderboard = await db.getLeaderboard(limit);
+    const rawLeaderboard = await db.getLeaderboard(limit);
     
-    // Validate leaderboard data is an array
-    if (!Array.isArray(leaderboard)) {
-      console.error('[Leaderboard] DB returned non-array:', typeof leaderboard);
+    if (!Array.isArray(rawLeaderboard)) {
+      console.error('[Leaderboard] DB returned non-array:', typeof rawLeaderboard);
       return res.status(500).json({ 
         success: false, 
         error: 'Invalid leaderboard data from database'
       });
     }
 
+    const leaderboard = normalizeLeaderboard(rawLeaderboard);
     leaderboardCache.data = leaderboard;
     leaderboardCache.timestamp = now;
 
