@@ -60,28 +60,45 @@ async function writeUser(user) {
 
 async function updateLeaderboardIndex(userId, highScore) {
   if (useMemory() || !redisClient || highScore <= 0) return;
-  await redisClient.zAdd(LEADERBOARD_KEY, { score: highScore, value: userId });
+  try {
+    await redisClient.zAdd(LEADERBOARD_KEY, { score: highScore, value: String(userId) });
+  } catch (err) {
+    console.warn('[DB] Leaderboard index update skipped:', err.message);
+  }
+}
+
+async function collectUsersFromRedis() {
+  const users = [];
+
+  try {
+    for await (const key of redisClient.scanIterator({ MATCH: 'user:*', COUNT: 100 })) {
+      const raw = await redisClient.get(key);
+      if (!raw) continue;
+      const user = JSON.parse(raw);
+      if (user?.high_score > 0) users.push(user);
+    }
+    return users;
+  } catch (scanErr) {
+    console.warn('[DB] scanIterator failed, falling back to KEYS:', scanErr.message);
+  }
+
+  const keys = await redisClient.keys('user:*');
+  for (const key of keys) {
+    const raw = await redisClient.get(key);
+    if (!raw) continue;
+    const user = JSON.parse(raw);
+    if (user?.high_score > 0) users.push(user);
+  }
+  return users;
 }
 
 async function rebuildLeaderboardIndex() {
   if (useMemory() || !redisClient) return;
 
-  let cursor = 0;
-  do {
-    const result = await redisClient.scan(cursor, { MATCH: 'user:*', COUNT: 100 });
-    cursor = Number(result.cursor);
-    for (const key of result.keys) {
-      const raw = await redisClient.get(key);
-      if (!raw) continue;
-      const user = JSON.parse(raw);
-      if (user.high_score > 0) {
-        await redisClient.zAdd(LEADERBOARD_KEY, {
-          score: user.high_score,
-          value: user.user_id,
-        });
-      }
-    }
-  } while (cursor !== 0);
+  const users = await collectUsersFromRedis();
+  for (const user of users) {
+    await updateLeaderboardIndex(user.user_id, user.high_score);
+  }
 }
 
 export async function initDatabase() {
@@ -259,6 +276,7 @@ function formatLeaderboardRows(users, limit) {
 }
 
 export async function getLeaderboard(limit = 10) {
+  const safeLimit = Math.max(1, Number(limit) || 10);
   const users = [];
 
   if (useMemory()) {
@@ -267,25 +285,47 @@ export async function getLeaderboard(limit = 10) {
         users.push(value);
       }
     }
-    return formatLeaderboardRows(users, limit);
+    return formatLeaderboardRows(users, safeLimit);
   }
 
-  let rankedUserIds = await redisClient.zRange(LEADERBOARD_KEY, 0, Math.max(limit * 2, limit) - 1, { REV: true });
+  try {
+    try {
+      let rankedUserIds = await redisClient.zRange(
+        LEADERBOARD_KEY,
+        0,
+        safeLimit - 1,
+        { REV: true },
+      );
 
-  if (!rankedUserIds.length) {
-    await rebuildLeaderboardIndex();
-    rankedUserIds = await redisClient.zRange(LEADERBOARD_KEY, 0, Math.max(limit * 2, limit) - 1, { REV: true });
-  }
+      if (!rankedUserIds.length) {
+        await rebuildLeaderboardIndex();
+        rankedUserIds = await redisClient.zRange(
+          LEADERBOARD_KEY,
+          0,
+          safeLimit - 1,
+          { REV: true },
+        );
+      }
 
-  for (const rankedUserId of rankedUserIds) {
-    const user = await readUser(rankedUserId);
-    if (user?.high_score > 0) {
-      users.push(user);
+      for (const rankedUserId of rankedUserIds) {
+        const user = await readUser(String(rankedUserId));
+        if (user?.high_score > 0) users.push(user);
+        if (users.length >= safeLimit) break;
+      }
+
+      if (users.length) {
+        return formatLeaderboardRows(users, safeLimit);
+      }
+    } catch (err) {
+      console.warn('[DB] Leaderboard sorted-set read failed, falling back to user scan:', err.message);
     }
-    if (users.length >= limit) break;
-  }
 
-  return formatLeaderboardRows(users, limit);
+    const scannedUsers = await collectUsersFromRedis();
+    return formatLeaderboardRows(scannedUsers, safeLimit);
+  } catch (err) {
+    console.error('[DB] getLeaderboard failed:', err.message);
+    return [];
+  }
 }
 
 export async function getDepositHistory(userId) {
