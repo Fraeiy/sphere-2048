@@ -1531,6 +1531,38 @@ async function submitToChain() {
 
 // ─── Event Listeners ──────────────────────────────────────────────────────────
 
+const SWIPE_MIN_DISTANCE = 28;
+let touchStartX = 0;
+let touchStartY = 0;
+let touchTracking = false;
+
+/**
+ * Shared gate for keyboard, desktop arrows, and mobile swipes.
+ * @returns {boolean}
+ */
+function canAttemptMove() {
+  if (!isConnected) {
+    showMessage('❌ Please connect your wallet first!', 'err');
+    return false;
+  }
+  if (currentMovesLeft <= 0) {
+    showMessage('❌ No moves left. Please deposit more tokens.', 'err');
+    return false;
+  }
+  if (moveRequestInFlight) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * @param {'left'|'right'|'up'|'down'} direction
+ */
+function tryMove(direction) {
+  if (!canAttemptMove()) return;
+  doMove(direction);
+}
+
 /** Keyboard: arrow keys map to move directions. */
 document.addEventListener('keydown', e => {
   const map = {
@@ -1538,44 +1570,64 @@ document.addEventListener('keydown', e => {
     ArrowUp:   'up',   ArrowDown:  'down',
   };
   if (map[e.key]) {
-    e.preventDefault(); // stop page scroll
-    // Only allow moves if wallet is connected, has moves, and no request is pending
-    if (!isConnected) {
-      showMessage('❌ Please connect your wallet first!', 'err');
-      return;
-    }
-    if (currentMovesLeft <= 0) {
-      showMessage('❌ No moves left. Please deposit more tokens.', 'err');
-      return;
-    }
-    if (moveRequestInFlight) {
-      console.warn('[Keyboard] Move request already in flight, ignoring');
-      return;
-    }
-    doMove(map[e.key]);
+    e.preventDefault();
+    tryMove(map[e.key]);
   }
 });
 
-/** Mobile arrow pad buttons */
-document.querySelector('.arrow-pad').addEventListener('click', e => {
-  const btn = e.target.closest('[data-dir]');
-  if (btn) {
-    // Only allow moves if wallet is connected, has moves, and no request is pending
-    if (!isConnected) {
-      showMessage('❌ Please connect your wallet first!', 'err');
-      return;
+/** Desktop arrow pad buttons */
+const arrowPad = document.querySelector('.arrow-pad');
+if (arrowPad) {
+  arrowPad.addEventListener('click', e => {
+    const btn = e.target.closest('[data-dir]');
+    if (btn) tryMove(btn.dataset.dir);
+  });
+}
+
+/** Mobile: swipe on board to move (like play2048.co) */
+const boardWrapEl = document.getElementById('boardWrap');
+if (boardWrapEl) {
+  boardWrapEl.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    touchTracking = true;
+    touchStartX = e.touches[0].clientX;
+    touchStartY = e.touches[0].clientY;
+  }, { passive: true });
+
+  boardWrapEl.addEventListener('touchmove', (e) => {
+    if (!touchTracking || e.touches.length !== 1) return;
+    const dx = Math.abs(e.touches[0].clientX - touchStartX);
+    const dy = Math.abs(e.touches[0].clientY - touchStartY);
+    if (dx > 8 || dy > 8) {
+      e.preventDefault();
     }
-    if (currentMovesLeft <= 0) {
-      showMessage('❌ No moves left. Please deposit more tokens.', 'err');
-      return;
-    }
-    if (moveRequestInFlight) {
-      console.warn('[Mobile] Move request already in flight, ignoring');
-      return;
-    }
-    doMove(btn.dataset.dir);
-  }
-});
+  }, { passive: false });
+
+  boardWrapEl.addEventListener('touchend', (e) => {
+    if (!touchTracking) return;
+    touchTracking = false;
+
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+
+    const dx = touch.clientX - touchStartX;
+    const dy = touch.clientY - touchStartY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+
+    if (Math.max(absX, absY) < SWIPE_MIN_DISTANCE) return;
+
+    const direction = absX > absY
+      ? (dx > 0 ? 'right' : 'left')
+      : (dy > 0 ? 'down' : 'up');
+
+    tryMove(direction);
+  }, { passive: true });
+
+  boardWrapEl.addEventListener('touchcancel', () => {
+    touchTracking = false;
+  }, { passive: true });
+}
 
 /** Wallet connection button */
 document.getElementById('btnConnectWallet').addEventListener('click', async () => {

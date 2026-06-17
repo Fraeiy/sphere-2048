@@ -63,7 +63,20 @@
     .btn:hover:not(:disabled) { opacity: .88; }
 
     .play-area { display: flex; align-items: flex-end; gap: 14px; width: 100%; }
-    .board-wrap { background: linear-gradient(145deg, #f3bf8d, #de8f4f); border-radius: 8px; padding: 10px; flex: 1; min-width: 0; aspect-ratio: 1; box-shadow: 0 20px 34px rgba(130, 64, 19, 0.25); }
+    .board-wrap {
+      background: linear-gradient(145deg, #f3bf8d, #de8f4f);
+      border-radius: 8px;
+      padding: 10px;
+      flex: 1;
+      min-width: 0;
+      aspect-ratio: 1;
+      box-shadow: 0 20px 34px rgba(130, 64, 19, 0.25);
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      cursor: grab;
+    }
+    .board-wrap:active { cursor: grabbing; }
     .board { display: grid; grid-template-columns: repeat(4, 1fr); grid-template-rows: repeat(4, 1fr); gap: 10px; width: 100%; height: 100%; }
     .cell { background: var(--tile-empty); border-radius: 6px; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 900; transition: background .12s, color .12s, transform .1s; }
     .cell[data-v="2"]    { background:#fff0dd; color:#7a5a45; }
@@ -142,9 +155,10 @@
     .arrow-pad .down { grid-area: down; }
     .arrow-pad .right { grid-area: right; }
 
-    @media (max-width: 560px) {
-      .play-area { flex-direction: column; align-items: center; }
-      .arrow-pad { padding-bottom: 0; }
+    @media (max-width: 768px), (hover: none) and (pointer: coarse) {
+      .arrow-pad { display: none !important; }
+      .play-area { flex-direction: column; align-items: stretch; }
+      .board-wrap { width: 100%; cursor: default; }
     }
 
     @media (max-width: 480px) {
@@ -207,7 +221,7 @@
 
     <!-- ── Board + controls (side by side on desktop) ─────────────────────── -->
     <div class="play-area">
-      <div class="board-wrap">
+      <div class="board-wrap" id="boardWrap" aria-label="Swipe to move tiles">
         <div class="board" id="board">
           <!-- 16 cells rendered by ui.js -->
         </div>
