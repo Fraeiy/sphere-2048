@@ -1018,25 +1018,29 @@ async function api(path, options = {}) {
       ...(options.headers ?? {}),
     },
   });
-  
-  const data = await res.json().catch(err => {
-    console.error('[API] Failed to parse response:', err);
-    throw new Error(`API ${path} → ${res.status} (invalid JSON)`);
-  });
-  
-  // Check for error responses from server
-  if (!res.ok) {
-    console.error('[API] Server error:', { path, status: res.status, data });
-    throw new Error(data?.errorMessage || data?.error || `API ${path} → ${res.status}`);
+
+  const rawBody = await res.text();
+  let data = null;
+  if (rawBody) {
+    try {
+      data = JSON.parse(rawBody);
+    } catch (err) {
+      console.error('[API] Failed to parse response:', err, { path, status: res.status, rawBody });
+      throw new Error(rawBody.slice(0, 120) || `API ${path} → ${res.status} (invalid JSON)`);
+    }
   }
-  
-  // Additional safety check: if success flag exists and is false, treat as error
+
+  if (!res.ok) {
+    console.error('[API] Server error:', { path, status: res.status, data, rawBody });
+    throw new Error(data?.errorMessage || data?.error || rawBody || `API ${path} → ${res.status}`);
+  }
+
   if (data && typeof data.success === 'boolean' && !data.success) {
     console.error('[API] Request failed according to success flag:', { path, data });
     throw new Error(data?.errorMessage || data?.error || `API request failed: ${path}`);
   }
-  
-  return data;
+
+  return data ?? {};
 }
 
 /** GET /api/state — returns current game state */
@@ -1049,8 +1053,11 @@ const fetchNew   = () => api('/api/new', { method: 'POST', body: JSON.stringify(
 const fetchMove  = dir =>
   api('/api/move', { method: 'POST', body: JSON.stringify({ userId, direction: dir }) });
 
-/** POST /api/submit-score — publishes score to blockchain */
-const fetchSubmit = () => api('/api/submit-score', { method: 'POST', body: JSON.stringify({ userId }) });
+/** POST /api/submit-score — persists score for leaderboard */
+const fetchSubmit = (score, movesUsed) => api('/api/submit-score', {
+  method: 'POST',
+  body: JSON.stringify({ userId, score, movesUsed }),
+});
 
 /** GET /api/sphere-status — connection info */
 const fetchSphereStatus = () => api('/api/sphere-status');
@@ -1150,8 +1157,18 @@ async function loadLeaderboard(forceRefresh = false) {
     renderLeaderboardRows(entries);
   } catch (err) {
     console.error('[Leaderboard] Load error:', err);
+
+    if (Array.isArray(leaderboardCache.entries)) {
+      renderLeaderboardRows(leaderboardCache.entries);
+      showMessage('⚠️ Showing cached leaderboard. Refresh again in a moment.', 'warn');
+      return;
+    }
+
+    const isRateLimited = /rate limit|too many requests/i.test(err.message || '');
     if (leaderboardBodyEl) {
-      leaderboardBodyEl.innerHTML = '<div class="leaderboard-empty">❌ Failed to load leaderboard. Please try again.</div>';
+      leaderboardBodyEl.innerHTML = `<div class="leaderboard-empty">❌ ${isRateLimited
+        ? 'Too many requests. Please wait a moment and try again.'
+        : 'Failed to load leaderboard. Please try again.'}</div>`;
     }
   }
 }
@@ -1473,7 +1490,7 @@ async function autoSubmitScore(score, board) {
   
   showMessage(`Auto-submitting score after ${moveCount} moves… ⛓`, 'warn');
   try {
-    const result = await fetchSubmit();
+    const result = await fetchSubmit(score, moveCount);
     if (result.success) {
       scoreSubmitted = true;
       showMessage(`✅ Score ${score} auto-submitted! Event ID: ${result.eventId}`, 'ok');

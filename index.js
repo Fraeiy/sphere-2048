@@ -128,16 +128,36 @@ app.use(cors({
   maxAge: 86400 // 24 hours
 }));
 
+/** Return JSON for rate-limit responses so the frontend can parse them. */
+function rateLimitJsonHandler(req, res, _next, options) {
+  res.status(options.statusCode).json({
+    success: false,
+    error: 'RATE_LIMITED',
+    errorMessage: typeof options.message === 'string' ? options.message : 'Too many requests',
+  });
+}
+
+const READ_ONLY_API_PATHS = new Set([
+  '/api/leaderboard',
+  '/api/sphere-status',
+  '/api/balance',
+]);
+
 // Rate limiting middleware
 const limiters = {
-  // General API rate limit: 100 requests per 15 minutes
+  // General API rate limit: 300 requests per 15 minutes
   general: rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 100,
+    max: 300,
     message: 'Too many requests from this IP, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => req.path.startsWith('/public') || req.path === '/'
+    handler: rateLimitJsonHandler,
+    skip: (req) => (
+      req.path.startsWith('/public')
+      || req.path === '/'
+      || (req.method === 'GET' && READ_ONLY_API_PATHS.has(req.path))
+    ),
   }),
 
   // Strict limit for authentication/sensitive endpoints: 5 per minute
@@ -145,7 +165,8 @@ const limiters = {
     windowMs: 60 * 1000,
     max: 5,
     message: 'Too many authentication attempts, please try again later.',
-    skipSuccessfulRequests: false
+    skipSuccessfulRequests: false,
+    handler: rateLimitJsonHandler,
   }),
 
   // Move endpoint: 20 per minute (reasonable game speed)
@@ -153,7 +174,8 @@ const limiters = {
     windowMs: 60 * 1000,
     max: 20,
     message: 'Move limit exceeded, please slow down.',
-    skipSuccessfulRequests: true
+    skipSuccessfulRequests: true,
+    handler: rateLimitJsonHandler,
   }),
 
   // Deposit endpoint: 10 per hour (prevent spam)
@@ -161,15 +183,17 @@ const limiters = {
     windowMs: 60 * 60 * 1000,
     max: 10,
     message: 'Deposit limit exceeded, please try again later.',
-    skipSuccessfulRequests: false
+    skipSuccessfulRequests: false,
+    handler: rateLimitJsonHandler,
   }),
 
-  // Leaderboard: 30 per minute (read-heavy)
+  // Leaderboard: 60 per minute (read-heavy)
   leaderboard: rateLimit({
     windowMs: 60 * 1000,
-    max: 30,
+    max: 60,
     message: 'Leaderboard request limit exceeded.',
-    skipSuccessfulRequests: true
+    skipSuccessfulRequests: true,
+    handler: rateLimitJsonHandler,
   })
 };
 
@@ -538,13 +562,9 @@ app.post('/api/register', async (req, res) => {
   try {
     const userId = nametag || address;
     
-    // Check if user already exists in DB (deduplication)
-    let existingUser = await db.getUserStats(userId);
-    
-    if (!existingUser) {
-      // Only create if not found
-      await db.getOrCreateUser(userId, address);
-    }
+    const walletId = nametag || address || userId;
+    const existingUser = await db.getUserStats(userId);
+    await db.getOrCreateUser(userId, walletId);
     
     UserBalances.initializeUser(userId, address || userId);
     if (existingUser) {
@@ -1111,11 +1131,18 @@ app.post('/api/submit-score', async (req, res) => {
 
   try {
     const state = getSession(userId);
-    const finalScore = score || state?.score || 0;
+    const parsedScore = Number(score);
+    const finalScore = Number.isFinite(parsedScore) && parsedScore > 0
+      ? parsedScore
+      : (state?.score || 0);
+    const parsedMoves = Number(movesUsed);
+    const finalMovesUsed = Number.isFinite(parsedMoves) && parsedMoves >= 0
+      ? parsedMoves
+      : (state?.totalMovesMade || state?.moveCount || 0);
     
     // CRITICAL: Always save the score to prevent loss
     if (finalScore > 0) {
-      await db.submitScore(userId, finalScore, movesUsed || 0);
+      await db.submitScore(userId, finalScore, finalMovesUsed);
       leaderboardCache.data = null;
       leaderboardCache.timestamp = 0;
       console.log(`[Score] Submitted score ${finalScore} for ${userId}`);
@@ -1163,7 +1190,6 @@ app.get('/api/leaderboard', limiters.leaderboard, async (req, res) => {
     if (
       leaderboardCache.data 
       && Array.isArray(leaderboardCache.data)
-      && leaderboardCache.data.length > 0
       && (now - leaderboardCache.timestamp) < leaderboardCache.ttl
     ) {
       return res.json({ 

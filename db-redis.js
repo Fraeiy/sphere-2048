@@ -7,12 +7,16 @@
 import { createClient } from 'redis';
 
 const REDIS_URL = process.env.REDIS_URL || '';
-const USE_REDIS = !!REDIS_URL;
-const IN_MEMORY = !USE_REDIS;
 const MOVE_COST_ATOMIC = 100000000000000000; // 0.1 UCT
+const LEADERBOARD_KEY = 'leaderboard:highscores';
 
 const inMemoryStore = new Map();
 let redisClient = null;
+let storageMode = REDIS_URL ? 'redis' : 'memory';
+
+function useMemory() {
+  return storageMode === 'memory';
+}
 
 function now() {
   return Date.now();
@@ -36,7 +40,7 @@ function createUserRecord(userId, walletId = null) {
 
 async function readUser(userId) {
   const key = `user:${userId}`;
-  if (IN_MEMORY) {
+  if (useMemory()) {
     return inMemoryStore.get(key) || null;
   }
   const raw = await redisClient.get(key);
@@ -46,7 +50,7 @@ async function readUser(userId) {
 async function writeUser(user) {
   const key = `user:${user.user_id}`;
   user.updated_at = now();
-  if (IN_MEMORY) {
+  if (useMemory()) {
     inMemoryStore.set(key, user);
     return user;
   }
@@ -54,19 +58,49 @@ async function writeUser(user) {
   return user;
 }
 
+async function updateLeaderboardIndex(userId, highScore) {
+  if (useMemory() || !redisClient || highScore <= 0) return;
+  await redisClient.zAdd(LEADERBOARD_KEY, { score: highScore, value: userId });
+}
+
+async function rebuildLeaderboardIndex() {
+  if (useMemory() || !redisClient) return;
+
+  let cursor = 0;
+  do {
+    const result = await redisClient.scan(cursor, { MATCH: 'user:*', COUNT: 100 });
+    cursor = Number(result.cursor);
+    for (const key of result.keys) {
+      const raw = await redisClient.get(key);
+      if (!raw) continue;
+      const user = JSON.parse(raw);
+      if (user.high_score > 0) {
+        await redisClient.zAdd(LEADERBOARD_KEY, {
+          score: user.high_score,
+          value: user.user_id,
+        });
+      }
+    }
+  } while (cursor !== 0);
+}
+
 export async function initDatabase() {
-  if (USE_REDIS) {
+  if (REDIS_URL) {
     try {
       redisClient = createClient({ url: REDIS_URL });
       redisClient.on('error', (err) => console.error('[DB] Redis error:', err));
       await redisClient.connect();
       await redisClient.ping();
+      storageMode = 'redis';
       console.log('[DB] ✅ Connected to Redis');
       return true;
     } catch (err) {
       console.warn('[DB] ⚠️  Redis connection failed:', err.message);
       redisClient = null;
+      storageMode = 'memory';
     }
+  } else {
+    storageMode = 'memory';
   }
   console.log('[DB] Using in-memory storage (local fallback)');
 }
@@ -129,7 +163,7 @@ export async function addDeposit(userId, amountAtomic, txHash = null) {
   };
 
   const depositKey = `deposit:${userId}:${ts}`;
-  if (IN_MEMORY) {
+  if (useMemory()) {
     inMemoryStore.set(depositKey, depositRecord);
   } else {
     await redisClient.set(depositKey, JSON.stringify(depositRecord));
@@ -164,7 +198,7 @@ export async function deductMove(userId, direction = 'unknown', score = 0) {
   };
 
   const moveKey = `move:${userId}:${ts}`;
-  if (IN_MEMORY) {
+  if (useMemory()) {
     inMemoryStore.set(moveKey, moveRecord);
   } else {
     await redisClient.set(moveKey, JSON.stringify(moveRecord));
@@ -182,6 +216,7 @@ export async function submitScore(userId, score, movesUsed = 0) {
   if (score > (user.high_score || 0)) {
     user.high_score = score;
     await writeUser(user);
+    await updateLeaderboardIndex(userId, score);
   }
 
   const scoreRecord = {
@@ -193,7 +228,7 @@ export async function submitScore(userId, score, movesUsed = 0) {
   };
 
   const scoreKey = `score:${userId}:${ts}`;
-  if (IN_MEMORY) {
+  if (useMemory()) {
     inMemoryStore.set(scoreKey, scoreRecord);
   } else {
     await redisClient.set(scoreKey, JSON.stringify(scoreRecord));
@@ -203,28 +238,9 @@ export async function submitScore(userId, score, movesUsed = 0) {
   return scoreRecord;
 }
 
-export async function getLeaderboard(limit = 10) {
-  const users = [];
-
-  if (IN_MEMORY) {
-    for (const [key, value] of inMemoryStore.entries()) {
-      if (key.startsWith('user:') && value?.high_score > 0) {
-        users.push(value);
-      }
-    }
-  } else {
-    const keys = await redisClient.keys('user:*');
-    for (const key of keys) {
-      const raw = await redisClient.get(key);
-      if (!raw) continue;
-      const user = JSON.parse(raw);
-      if (user.high_score > 0) {
-        users.push(user);
-      }
-    }
-  }
-
+function formatLeaderboardRows(users, limit) {
   return users
+    .filter((user) => user?.high_score > 0)
     .sort((a, b) => {
       if (b.high_score !== a.high_score) return b.high_score - a.high_score;
       return (b.total_moves || 0) - (a.total_moves || 0);
@@ -237,15 +253,45 @@ export async function getLeaderboard(limit = 10) {
       highScore: user.high_score || 0,
       totalMoves: user.total_moves || 0,
       totalDeposited: user.total_deposited || 0,
-      gameCount: 1,
+      gameCount: user.game_count || 1,
       avgScore: user.high_score || 0,
     }));
+}
+
+export async function getLeaderboard(limit = 10) {
+  const users = [];
+
+  if (useMemory()) {
+    for (const [key, value] of inMemoryStore.entries()) {
+      if (key.startsWith('user:') && value?.high_score > 0) {
+        users.push(value);
+      }
+    }
+    return formatLeaderboardRows(users, limit);
+  }
+
+  let rankedUserIds = await redisClient.zRange(LEADERBOARD_KEY, 0, Math.max(limit * 2, limit) - 1, { REV: true });
+
+  if (!rankedUserIds.length) {
+    await rebuildLeaderboardIndex();
+    rankedUserIds = await redisClient.zRange(LEADERBOARD_KEY, 0, Math.max(limit * 2, limit) - 1, { REV: true });
+  }
+
+  for (const rankedUserId of rankedUserIds) {
+    const user = await readUser(rankedUserId);
+    if (user?.high_score > 0) {
+      users.push(user);
+    }
+    if (users.length >= limit) break;
+  }
+
+  return formatLeaderboardRows(users, limit);
 }
 
 export async function getDepositHistory(userId) {
   const deposits = [];
 
-  if (IN_MEMORY) {
+  if (useMemory()) {
     for (const [key, value] of inMemoryStore.entries()) {
       if (key.startsWith(`deposit:${userId}:`)) deposits.push(value);
     }
@@ -273,7 +319,7 @@ export async function getDepositHistory(userId) {
 export async function getMoveHistory(userId, limit = 50) {
   const moves = [];
 
-  if (IN_MEMORY) {
+  if (useMemory()) {
     for (const [key, value] of inMemoryStore.entries()) {
       if (key.startsWith(`move:${userId}:`)) moves.push(value);
     }
@@ -325,7 +371,7 @@ export async function verifyBalanceFromHistory(userId) {
 }
 
 export async function getDatabaseStats() {
-  if (IN_MEMORY) {
+  if (useMemory()) {
     let totalUsers = 0;
     let totalDeposits = 0;
     let totalScores = 0;
