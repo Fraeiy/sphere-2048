@@ -78,6 +78,26 @@ let lastBalanceState = null;
 let lastBalanceSyncTime = 0;
 
 /**
+ * Resolve the canonical wallet address from Sphere Connect identity.
+ * @param {object|null} identity
+ * @returns {string|null}
+ */
+function getWalletAddress(identity) {
+  if (!identity) return null;
+  return identity.l1Address || identity.directAddress || identity.address || null;
+}
+
+/**
+ * Resolve the canonical game user id (nametag preferred, then wallet address).
+ * @param {object|null} identity
+ * @returns {string|null}
+ */
+function getCanonicalUserId(identity) {
+  if (!identity) return null;
+  return identity.nametag || getWalletAddress(identity);
+}
+
+/**
  * Syncs displayed in-game balance from server-provided UCT value.
  * @param {number|string} currentUct
  */
@@ -278,19 +298,66 @@ function validateDepositAmount() {
  * @param {object} identity - User's wallet identity { nametag, address }
  * @returns {Promise<boolean>}
  */
+async function createPlayerGameWallet(playerAddress) {
+  const response = await fetch('/api/create-wallet', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Session-Id': sessionId,
+    },
+    body: JSON.stringify({ playerAddress }),
+  });
+
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result?.success) {
+    throw new Error(result?.error || `Server error: ${response.status}`);
+  }
+
+  DEPOSIT_ADDRESS = result.depositAddress;
+  GAME_HANDLE = result.handle || result.gameHandle || playerAddress;
+  return result;
+}
+
+async function syncPlayerBalanceFromServer() {
+  if (!userId) return null;
+
+  const balanceResponse = await fetch(`/api/balance?userId=${encodeURIComponent(userId)}`);
+  if (!balanceResponse.ok) {
+    throw new Error(`Balance check failed: ${balanceResponse.status}`);
+  }
+
+  const balanceData = await balanceResponse.json();
+  if (balanceData.balance) {
+    const { current, movesLeft, totalDeposited } = balanceData.balance;
+    syncGameDepositFromServer(current);
+    currentMovesLeft = movesLeft || 0;
+    updateBalanceDisplay();
+    updateMoveButtonStates();
+    console.log(`[Balance] Current: ${current} UCT, Moves left: ${movesLeft}, Total deposited: ${totalDeposited} UCT`);
+  }
+
+  return balanceData;
+}
+
 async function registerPlayerWithGame(identity) {
   try {
     showMessage('🔧 Registering with game…', 'warn');
-    
+
+    const walletAddress = getWalletAddress(identity);
+    const canonicalUserId = getCanonicalUserId(identity);
+    if (!canonicalUserId) {
+      throw new Error('Wallet identity is missing nametag and address');
+    }
+
     const response = await fetch('/api/register', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'X-Session-Id': sessionId,
       },
-      body: JSON.stringify({ 
+      body: JSON.stringify({
         nametag: identity.nametag,
-        address: identity.address 
+        address: walletAddress,
       }),
     });
 
@@ -299,49 +366,53 @@ async function registerPlayerWithGame(identity) {
     }
 
     const result = await response.json();
-
-    if (result.success) {
-      userId = result.userId;
-      GAME_HANDLE = identity.nametag || identity.address?.slice(0, 12) || 'Player';
-      DEPOSIT_ADDRESS = result.treasuryAddress;
-      walletReady = true;
-      console.log('[Wallet] ✅ Player registered:', GAME_HANDLE);
-      console.log('[Wallet] 📮 Treasury address:', DEPOSIT_ADDRESS);
-      console.log('[Wallet] 🎮 userId:', userId);
-      showMessage(`💰 Send UCT to: ${GAME_HANDLE}`, 'ok');
-      updateWalletUI();
-      
-      // Check game balance from server
-      try {
-        console.log('[Balance] Fetching user balance...');
-        const balanceResponse = await fetch(`/api/balance?userId=${userId}`);
-        if (balanceResponse.ok) {
-          const balanceData = await balanceResponse.json();
-          console.log('[Balance] User balance:', balanceData);
-          if (balanceData.balance) {
-            const { current, movesLeft, totalDeposited } = balanceData.balance;
-            syncGameDepositFromServer(current);
-            updateBalanceDisplay();
-            console.log(`[Balance] Current: ${current} UCT, Moves left: ${movesLeft}, Total deposited: ${totalDeposited} UCT`);
-            if (movesLeft > 0) {
-              showMessage(`💰 Welcome back! You have ${movesLeft} moves (${current} UCT)`, 'ok');
-              // FIXED: Don't auto-start game - just update balance and show state
-              // User can start game manually if they want
-              return true;
-            } else {
-              // No moves - show test deposit info
-              showMessage(`💰 You need to make a deposit! Send UCT to the treasury (2048game) or use test endpoint.`, 'warn');
-              console.log('[Balance] No moves available - test deposit with: curl -X POST http://localhost:5000/api/test-deposit -H "Content-Type: application/json" -d \'{"userId":"' + userId + '","uct":100}\'');
-              return true;
-            }
-          }
-        }
-      } catch (balErr) {
-        console.error('[Balance] Failed to check game balance:', balErr);
-      }
-    } else {
+    if (!result.success) {
       throw new Error(result.error || 'Failed to register player');
     }
+
+    userId = canonicalUserId;
+    GAME_HANDLE = identity.nametag || walletAddress?.slice(0, 12) || 'Player';
+
+    await createPlayerGameWallet(walletAddress || userId);
+    walletReady = true;
+
+    const connectResponse = await fetch('/api/connect', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Id': sessionId,
+      },
+      body: JSON.stringify({ walletId: userId }),
+    });
+    const connectData = await connectResponse.json().catch(() => ({}));
+    if (connectResponse.ok && connectData?.success && connectData.balance) {
+      syncGameDepositFromServer(connectData.balance.current);
+      currentMovesLeft = connectData.balance.movesLeft || 0;
+      updateBalanceDisplay();
+      updateMoveButtonStates();
+    } else {
+      await syncPlayerBalanceFromServer();
+    }
+
+    console.log('[Wallet] ✅ Player registered:', GAME_HANDLE);
+    console.log('[Wallet] 📮 Treasury address:', DEPOSIT_ADDRESS);
+    console.log('[Wallet] 🎮 userId:', userId);
+    showMessage(`💰 Deposit UCT to treasury for ${GAME_HANDLE}`, 'ok');
+    updateWalletUI();
+
+    if (currentMovesLeft > 0) {
+      showMessage(`💰 Welcome back! You have ${currentMovesLeft} moves`, 'ok');
+      try {
+        const state = await fetchState();
+        applyState(state);
+      } catch (stateErr) {
+        console.warn('[Game] Could not load existing board:', stateErr.message);
+      }
+    } else {
+      showMessage('💰 Make a deposit to start playing.', 'warn');
+    }
+
+    return true;
   } catch (err) {
     console.error('[Wallet] ❌ Failed to register player:', err);
     showMessage(`❌ Wallet setup failed: ${err.message}`, 'err');
@@ -395,12 +466,11 @@ async function connectWallet(preOpenedPopup = null) {
                 if (msg.sessionId) {
                   sessionStorage.setItem(SESSION_KEY, msg.sessionId);
                 }
-                const displayName = walletIdentity.nametag || walletIdentity.address?.slice(0, 20) || 'Sphere Wallet';
+                const displayName = walletIdentity.nametag || getWalletAddress(walletIdentity)?.slice(0, 20) || 'Sphere Wallet';
                 showMessage(`✅ Connected to ${displayName}…`, 'ok');
                 updateWalletUI();
                 
-                // Register with game server
-                if (walletIdentity.nametag || walletIdentity.address) {
+                if (getCanonicalUserId(walletIdentity)) {
                   registerPlayerWithGame(walletIdentity)
                     .catch(err => console.error('Failed to register with game:', err));
                 }
@@ -493,12 +563,11 @@ async function connectWallet(preOpenedPopup = null) {
                   sessionStorage.setItem(SESSION_KEY, msg.sessionId);
                 }
 
-                const displayName = walletIdentity.nametag || walletIdentity.address?.slice(0, 20) || 'Sphere Wallet';
+                const displayName = walletIdentity.nametag || getWalletAddress(walletIdentity)?.slice(0, 20) || 'Sphere Wallet';
                 showMessage(`✅ Connected to ${displayName}…`, 'ok');
                 updateWalletUI();
                 
-                // Register with game server
-                if (walletIdentity.nametag || walletIdentity.address) {
+                if (getCanonicalUserId(walletIdentity)) {
                   registerPlayerWithGame(walletIdentity)
                     .catch(err => console.error('Failed to register with game:', err));
                 }
@@ -665,8 +734,8 @@ async function depositToPlay(depositAmount) {
     return false;
   }
 
-  if (!walletIdentity?.nametag) {
-    showMessage('❌ Unicity ID required. Please register a Unicity ID in Sphere to play.', 'err');
+  if (!getCanonicalUserId(walletIdentity)) {
+    showMessage('❌ Wallet identity unavailable. Reconnect your Sphere wallet.', 'err');
     return false;
   }
 
@@ -759,8 +828,9 @@ async function depositToPlay(depositAmount) {
                   },
                   body: JSON.stringify({
                     userId,
-                    senderAddress: walletIdentity?.address || userId,
+                    senderAddress: getWalletAddress(walletIdentity) || userId,
                     uct: depositAmount,
+                    txHash: msg.result?.txHash || msg.result?.hash || undefined,
                   }),
                 })
                   .then(async (response) => {
@@ -807,7 +877,7 @@ async function depositToPlay(depositAmount) {
           to: DEPOSIT_ADDRESS,
           amount: depositAmount,
           coinId: uctCoinId,
-          memo: '2048 game deposit'
+          memo: `2048:${userId}`
         }
       }, WALLET_URL);
     });
@@ -1246,7 +1316,9 @@ function showMessage(text, type = '') {
 
 /** Renders the Sphere SDK connection status into the bottom pill. */
 function renderSphereStatus(status) {
-  const { connected, wallet } = status;
+  const wallet = status.wallet || status.treasury || {};
+  const chainConnected = status.chain?.connected;
+  const connected = Boolean(status.connected || chainConnected);
 
   spherePillEl.textContent = '';
 
@@ -1255,13 +1327,18 @@ function renderSphereStatus(status) {
   spherePillEl.appendChild(label);
 
   if (!connected) {
-    spherePillEl.appendChild(document.createTextNode(' Not connected — score submission disabled.'));
+    spherePillEl.appendChild(document.createTextNode(' Treasury not configured — deposits disabled.'));
     return;
   }
 
-  spherePillEl.appendChild(document.createTextNode(` Connected to Unicity (${wallet.network})`));
+  const network = wallet.network || status.chain?.network || 'testnet';
+  spherePillEl.appendChild(document.createTextNode(` Connected to Unicity (${network})`));
   if (wallet.nametag) spherePillEl.appendChild(document.createTextNode(` · @${wallet.nametag}`));
-  if (wallet.address) spherePillEl.appendChild(document.createTextNode(` · ${wallet.address.slice(0, 20)}…`));
+  const address = wallet.address || status.chain?.l1Address;
+  if (address) spherePillEl.appendChild(document.createTextNode(` · ${address.slice(0, 20)}…`));
+  if (chainConnected) {
+    spherePillEl.appendChild(document.createTextNode(' · on-chain batches enabled'));
+  }
 }
 
 /** Polls Sphere status every 5 seconds until connected, then every 30 seconds. */
@@ -1394,12 +1471,11 @@ async function doMove(direction) {
       console.log(`[Move] Synced moves: ${currentMovesLeft}`);
     }
 
-    if (state.moveBatch?.txHash) {
+    if (state.moveBatch?.queued) {
       showMessage(
-        `⛓ Batched ${state.moveBatch.count} moves on-chain. Tx: ${state.moveBatch.txHash.slice(0, 18)}…`,
+        `⛓ Queued ${state.moveBatch.count} moves for on-chain batch (${state.moveBatch.moveHash?.slice(0, 12) || 'pending'}…)`,
         'ok'
       );
-      return;
     }
     
     if (!state.moved) {
@@ -1423,12 +1499,9 @@ async function doMove(direction) {
         );
       }
 
-      // Auto-submit after X moves
+      moveCount++;
       if (moveCount >= AUTO_SUBMIT_MOVE_COUNT && !scoreSubmitted) {
-        moveCount++;
         await autoSubmitScore(state.score, state.board);
-      } else {
-        moveCount++;
       }
     }
   } catch (err) {
@@ -1639,24 +1712,25 @@ document.addEventListener('keydown', (event) => {
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
 
+function renderEmptyBoard() {
+  renderBoard([
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+  ]);
+  scoreEl.textContent = '0';
+  bestEl.textContent = '0';
+  updateMoveButtonStates();
+}
+
 (async () => {
   showMessage('Loading game…');
+  renderEmptyBoard();
 
-  try {
-    // Load (or create) a game on the server
-    const state = await fetchState();
-    applyState(state);
-    
-    // Show message that wallet connection is required
-    if (!isConnected) {
-      showMessage('⚠️  Please connect your wallet and deposit UCT tokens to start playing.', 'warn');
-    } else {
-      showMessage('Use arrow keys or buttons to move tiles.');
-    }
-  } catch (err) {
-    showMessage(`Failed to load game: ${err.message}`, 'err');
+  if (!isConnected) {
+    showMessage('⚠️  Connect your Sphere wallet and deposit UCT to start playing.', 'warn');
   }
 
-  // Start Sphere status polling in the background
   pollSphereStatus();
 })();

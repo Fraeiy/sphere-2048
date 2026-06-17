@@ -25,7 +25,8 @@ export function initializeUser(userId, walletId) {
       walletId,
       balanceCents: 0,
       totalDepositedCents: 0,
-      highScore: 0
+      highScore: 0,
+      totalMovesMade: 0,
     });
   }
 }
@@ -42,10 +43,11 @@ export function syncFromDatabase(userId, dbUser) {
   
   userCache.set(userId, {
     userId,
-    walletId: dbUser.wallet_address || userId,
+    walletId: dbUser.wallet_id || dbUser.wallet_address || userId,
     balanceCents,
     totalDepositedCents,
-    highScore
+    highScore,
+    totalMovesMade: dbUser.total_moves || 0,
   });
 }
 
@@ -137,4 +139,14 @@ export function atomicToUCT(atomic) {
 export function calculateMovesFromUCT(uct) {
   const atomic = uct * 1e18;
   return calculateMovesFromAtomic(atomic);
+}
+
+/**
+ * Returns true when the user has at least one paid move available.
+ * @param {string} userId
+ * @returns {boolean}
+ */
+export function canMove(userId) {
+  const user = getBalance(userId);
+  return calculateMoves(user.balanceCents) > 0;
 }

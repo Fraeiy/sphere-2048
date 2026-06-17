@@ -129,14 +129,29 @@ export async function connectSphere() {
 // ─── Score Submission ─────────────────────────────────────────────────────────
 
 /**
+ * Creates a unique, discoverable game handle for a player.
+ * Format: @{prefix}_2048_{suffix}
+ *
+ * @param {string} playerAddress - Player wallet address or nametag
+ * @returns {string}
+ */
+export function generatePlayerHandle(playerAddress) {
+  const normalized = String(playerAddress || 'player').replace(/^@/, '');
+  const prefix = normalized.slice(0, 6).toLowerCase().replace(/[^a-z0-9]/g, '') || 'player';
+  const suffix = Math.random().toString(36).slice(2, 6);
+  return `@${prefix}_2048_${suffix}`;
+}
+
+/**
  * Creates a game wallet handle for a player using their nametag.
  * Format: {nametag}_2048 (e.g., fraey_2048, john_2048)
- * 
+ *
  * @param {string} nametag - Player's Sphere wallet nametag
  * @returns {string} Game wallet handle
  */
 function createGameHandle(nametag) {
-  return `${nametag}_2048`;
+  const clean = String(nametag || 'player').replace(/^@/, '');
+  return `${clean}_2048`;
 }
 
 /**
@@ -146,8 +161,54 @@ function createGameHandle(nametag) {
  * @param {string} gameHandle - The player's game handle (e.g., "fraey_2048")
  * @returns {Promise<{ success: boolean, gameHandle?: string, error?: string }>}
  */
+export async function publishPlayerIdentity(playerAddress, playerHandle) {
+  if (!sphereClient || !chainStatus.connected) {
+    console.warn('[Game] Sphere SDK unavailable — skipping identity publish');
+    return { success: true, gameHandle: playerHandle, published: false };
+  }
+
+  try {
+    const identity = sphereClient.identity;
+    if (identity?.transport?.publishNametag) {
+      await identity.transport.publishNametag(playerHandle.replace(/^@/, ''));
+    }
+    console.log(`[Game] Player identity published: ${playerHandle}`);
+    return { success: true, gameHandle: playerHandle, published: true };
+  } catch (err) {
+    console.warn(`[Game] Identity publish skipped: ${err?.message || err}`);
+    return { success: true, gameHandle: playerHandle, published: false };
+  }
+}
+
+/**
+ * @param {string} playerAddress
+ * @returns {Promise<{ success: boolean, depositAddress: string|null, handle: string, gameHandle: string, published?: boolean, error?: string }>}
+ */
+export async function generateDepositAddress(playerAddress) {
+  const handle = generatePlayerHandle(playerAddress);
+  const publishResult = await publishPlayerIdentity(playerAddress, handle);
+  const depositAddress = treasuryInfo.address || chainStatus.l1Address;
+
+  if (!depositAddress) {
+    return {
+      success: false,
+      error: 'Game treasury address is not configured',
+      depositAddress: null,
+      handle,
+      gameHandle: handle,
+    };
+  }
+
+  return {
+    success: true,
+    depositAddress,
+    handle,
+    gameHandle: publishResult.gameHandle || handle,
+    published: publishResult.published ?? false,
+  };
+}
+
 export async function publishGameWallet(gameHandle) {
-  // Simple acknowledgment — blockchain publishing is optional
   console.log(`[Game] Game handle created: ${gameHandle}`);
   return { success: true, gameHandle };
 }
@@ -249,10 +310,18 @@ export function getServerWalletAddress() {
  * @returns {{ connected: boolean, treasury: object }}
  */
 export function getSphereStatus() {
+  const connected = Boolean(treasuryInfo.address) || chainStatus.connected;
+  const wallet = {
+    network: treasuryInfo.network || chainStatus.network,
+    nametag: treasuryInfo.nametag,
+    address: treasuryInfo.address || chainStatus.l1Address,
+  };
+
   return {
-    connected: treasuryInfo.address ? true : false,
-    treasury:  treasuryInfo,
+    connected,
+    treasury: treasuryInfo,
     chain: chainStatus,
+    wallet,
   };
 }
 

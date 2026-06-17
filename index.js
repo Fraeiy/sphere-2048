@@ -13,20 +13,31 @@
  *   • Initialise the Sphere SDK at startup
  */
 
-// Load environment variables from .env file
-import dotenv from 'dotenv';
-dotenv.config();
-
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { fileURLToPath } from 'url';
 import { dirname, join }  from 'path';
+import dotenv from 'dotenv';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname  = dirname(__filename);
+
+// Load environment variables from project root regardless of process cwd
+dotenv.config({ path: join(__dirname, '.env') });
 import { randomUUID, createHash } from 'crypto';
 
-import { GameState }    from './game.js';
-import { connectSphere, submitScore, submitMoveBatch, getSphereStatus, publishGameWallet, getServerWalletAddress, simulateDeposit, getUserDeposits } from './sphere.js';
+import { GameState, applyMove, spawnTile, canMove as boardCanMove, hasWon } from './game.js';
+import {
+  connectSphere,
+  submitScore,
+  submitMoveBatch,
+  getSphereStatus,
+  generateDepositAddress,
+  getServerWalletAddress,
+  simulateDeposit,
+} from './sphere.js';
 import * as UserBalances from './userBalances.js';
 
 // Conditional import: use Redis in production (if REDIS_URL set), SQLite locally
@@ -34,9 +45,6 @@ const dbPath = process.env.REDIS_URL ? './db-redis.js' : './db.js';
 const db = await import(dbPath);
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname  = dirname(__filename);
 
 const app  = express();
 const PORT = process.env.PORT || 5000;
@@ -233,6 +241,9 @@ const userBatchQueues = new Map();
 /** Users currently being processed by batch worker. */
 const userBatchProcessing = new Set();
 
+/** Per-player game wallet metadata (handle + deposit routing info) */
+const playerWallets = new Map();
+
 /** Leaderboard cache for performance optimization */
 const leaderboardCache = {
   data: null,
@@ -421,7 +432,7 @@ app.post('/api/connect', async (req, res) => {
         highScore: user.highScore || 0
       },
       treasuryAddress,
-      treasuryNametag: 'sphere2048',
+      treasuryNametag: process.env.GAME_TREASURY_NAMETAG || 'sphere2048',
       restoredFromDatabase: restoredFromDatabase
     });
   } catch (err) {
@@ -429,6 +440,53 @@ app.post('/api/connect', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: err.message 
+    });
+  }
+});
+
+/**
+ * POST /api/create-wallet
+ * Creates a per-player game wallet handle and returns the treasury deposit address.
+ *
+ * Body:
+ *   { playerAddress: string }
+ */
+app.post('/api/create-wallet', limiters.auth, async (req, res) => {
+  const { playerAddress } = req.body;
+
+  if (!playerAddress || typeof playerAddress !== 'string') {
+    return res.status(400).json({
+      success: false,
+      error: 'playerAddress required',
+    });
+  }
+
+  try {
+    const cached = playerWallets.get(playerAddress);
+    if (cached) {
+      return res.json({ success: true, ...cached });
+    }
+
+    const walletInfo = await generateDepositAddress(playerAddress);
+    if (!walletInfo.success) {
+      return res.status(503).json(walletInfo);
+    }
+
+    await db.getOrCreateUser(playerAddress, playerAddress);
+    const payload = {
+      depositAddress: walletInfo.depositAddress,
+      handle: walletInfo.handle,
+      gameHandle: walletInfo.gameHandle,
+      published: walletInfo.published ?? false,
+    };
+    playerWallets.set(playerAddress, payload);
+
+    res.json({ success: true, ...payload });
+  } catch (err) {
+    console.error('[Server] Create wallet error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   }
 });
@@ -465,17 +523,9 @@ app.post('/api/register', async (req, res) => {
       await db.getOrCreateUser(userId, address);
     }
     
-    // Initialize in-memory (idempotent)
-    UserBalances.initializeUser(userId, address);
-    
-    // Sync existing DB data to memory if they diverge
+    UserBalances.initializeUser(userId, address || userId);
     if (existingUser) {
-      const inMem = UserBalances.getBalance(userId);
-      if (inMem) {
-        inMem.balance = existingUser.balance;
-        inMem.movesLeft = existingUser.moves_left;
-        inMem.totalDeposited = existingUser.total_deposited;
-      }
+      UserBalances.syncFromDatabase(userId, existingUser);
     }
     
     const treasuryAddress = getServerWalletAddress();
@@ -486,7 +536,7 @@ app.post('/api/register', async (req, res) => {
       success: true,
       userId,
       treasuryAddress,
-      treasuryNametag: '2048game'
+      treasuryNametag: process.env.GAME_TREASURY_NAMETAG || 'sphere2048'
     });
   } catch (err) {
     console.error('[Server] Registration error:', err);
@@ -617,7 +667,7 @@ app.post('/api/verify-deposit', limiters.deposits, async (req, res) => {
 
     // Add deposit to user balance in DB (source of truth!)
     const amountAtomic = Math.round(uct * 1e18);
-    await db.addDeposit(userId, amountAtomic, txHash || tx.hash);
+    await db.addDeposit(userId, amountAtomic, txHash || tx.transactionId);
 
     // READ BACK from database to ensure accurate response
     const updatedUser = await db.getUserStats(userId);
@@ -625,12 +675,13 @@ app.post('/api/verify-deposit', limiters.deposits, async (req, res) => {
     const uctDisplay = UserBalances.atomicToUCT(updatedUser.balance || 0);
     const totalDepositedDisplay = UserBalances.atomicToUCT(updatedUser.total_deposited || 0);
 
-    console.log(`[Deposit] Processed: userId=${userId}, +${uct} UCT, tx=${txHash || tx.hash}, moves=${moves}`);
+    const depositTxId = txHash || tx.transactionId;
+    console.log(`[Deposit] Processed: userId=${userId}, +${uct} UCT, tx=${depositTxId}, moves=${moves}`);
 
     res.json({ 
       success: true,
       transaction: {
-        hash: txHash || tx.hash,
+        hash: depositTxId,
         from: senderAddress,
         amount: uct,
         timestamp: Date.now(),
@@ -686,12 +737,11 @@ app.post('/api/test-deposit', async (req, res) => {
 
     // Add test deposit
     const amountAtomic = Math.round(uct * 1e18);
-    const moveCredits = Math.max(0, Math.floor(uct * 10));
-    const user = UserBalances.addDepositAtomic(userId, amountAtomic);
+    await db.addDeposit(userId, amountAtomic, `test-deposit-${Date.now()}`);
 
-    // Persist to database
-    await db.addDeposit(userId, amountAtomic, `test-deposit-${Date.now()}`, moveCredits);
-
+    const updatedUser = await db.getUserStats(userId);
+    UserBalances.syncFromDatabase(userId, updatedUser);
+    const user = UserBalances.getBalance(userId);
     const moves = UserBalances.calculateMoves(user.balanceCents);
     console.log(`[TestDeposit] Credited ${uct} UCT to ${userId}, now has ${moves} moves`);
 
@@ -701,7 +751,7 @@ app.post('/api/test-deposit', async (req, res) => {
         current: UserBalances.centsToUCT(user.balanceCents),
         totalDeposited: UserBalances.centsToUCT(user.totalDepositedCents),
         movesLeft: moves,
-        totalMoves: user.totalMovesMade
+        totalMoves: updatedUser?.total_moves || user.totalMovesMade || 0
       }
     });
   } catch (err) {
@@ -776,7 +826,7 @@ app.get('/api/state', async (req, res) => {
  * Query params:
  *   userId - User identifier
  */
-app.post('/api/new', (req, res) => {
+app.post('/api/new', async (req, res) => {
   // Check query first, then body
   let userId = req.query?.userId || req.body?.userId;
 
@@ -801,11 +851,23 @@ app.post('/api/new', (req, res) => {
       lastBatchTxHash: existing?.lastBatchTxHash || null,
     });
 
-    const user = UserBalances.getBalance(userId);
+    const dbUser = await db.getUserStats(userId);
+    if (dbUser) {
+      UserBalances.syncFromDatabase(userId, dbUser);
+    }
+    const moves = dbUser
+      ? UserBalances.calculateMovesFromAtomic(dbUser.balance || 0)
+      : UserBalances.calculateMoves(UserBalances.getBalance(userId).balanceCents);
 
     res.json({ 
       userId,
-      canPlay: user ? UserBalances.canMove(userId) : false,
+      canPlay: moves > 0,
+      balance: {
+        current: dbUser
+          ? UserBalances.atomicToUCT(dbUser.balance || 0)
+          : UserBalances.centsToUCT(UserBalances.getBalance(userId).balanceCents),
+        movesLeft: moves,
+      },
       ...state.toJSON() 
     });
   } catch (err) {
@@ -849,8 +911,6 @@ app.post('/api/move', limiters.moves, async (req, res) => {
   }
 
   try {
-    // ATOMIC TRANSACTION: All-or-nothing move processing
-    // 1. Check balance from DATABASE (source of truth!)
     const preCheckDb = await db.getUserStats(userId);
     if (!preCheckDb) {
       return res.status(400).json({ 
@@ -860,7 +920,6 @@ app.post('/api/move', limiters.moves, async (req, res) => {
       });
     }
 
-    // Calculate moves directly from DB balance
     const movesAvailable = UserBalances.calculateMovesFromAtomic(preCheckDb.balance || 0);
     if (movesAvailable <= 0) {
       return res.status(402).json({ 
@@ -875,14 +934,45 @@ app.post('/api/move', limiters.moves, async (req, res) => {
       });
     }
 
-    // 2. CRITICAL: Update DB FIRST (DB is source of truth)
+    const state = getSession(userId);
+    if (state.gameOver) {
+      return res.json({
+        success: true,
+        userId,
+        moved: false,
+        canPlay: movesAvailable > 0,
+        balance: {
+          current: UserBalances.atomicToUCT(preCheckDb.balance || 0),
+          movesLeft: movesAvailable,
+        },
+        ...state.toJSON(),
+      });
+    }
+
+    const preview = applyMove(state.board, direction);
+    if (!preview.moved) {
+      return res.json({
+        success: true,
+        userId,
+        moved: false,
+        canPlay: movesAvailable > 0,
+        balance: {
+          current: UserBalances.atomicToUCT(preCheckDb.balance || 0),
+          movesLeft: movesAvailable,
+        },
+        ...state.toJSON(),
+      });
+    }
+
     let dbMoveResult;
     try {
-      // Pass direction for audit trail
-      dbMoveResult = await db.deductMove(userId, direction, 0);
+      dbMoveResult = await db.deductMove(
+        userId,
+        direction,
+        state.score + preview.score
+      );
     } catch (dbErr) {
       console.error(`[Move] DB deduction failed for ${userId}:`, dbErr.message);
-      // DB failed - abort
       return res.status(503).json({
         success: false,
         error: 'MOVE_SYNC_ERROR',
@@ -901,25 +991,24 @@ app.post('/api/move', limiters.moves, async (req, res) => {
       });
     }
 
-    // 4. NOW sync in-memory to match DB
     UserBalances.syncFromDatabase(userId, dbMoveResult);
 
-    // 5. Apply move to game logic
-    const state = getSession(userId);
-    const moved = state.move(direction);
+    state.board = preview.board;
+    state.score += preview.score;
+    if (state.score > state.best) state.best = state.score;
+    if (hasWon(state.board)) state.won = true;
+    spawnTile(state.board);
+    if (!boardCanMove(state.board)) state.gameOver = true;
 
-    // Update high score
+    const moved = true;
+
     if (state.score > (userBestScores.get(userId) ?? 0)) {
       userBestScores.set(userId, state.score);
     }
     UserBalances.updateHighScore(userId, state.score);
 
-    // Get updated user record for batch tracking
-    const userAfterMove = UserBalances.getBalance(userId);
-
-    // Track move for batch submission
     const moveBuffer = pushMoveForBatch(userId, {
-      moveNo: userAfterMove?.totalMovesMade ?? Date.now(),
+      moveNo: dbMoveResult.total_moves || Date.now(),
       direction,
       moved,
       score: state.score,
