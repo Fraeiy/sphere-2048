@@ -145,10 +145,10 @@ const READ_ONLY_API_PATHS = new Set([
 
 // Rate limiting middleware
 const limiters = {
-  // General API rate limit: 300 requests per 15 minutes
+  // General API rate limit: 600 requests per 15 minutes
   general: rateLimit({
     windowMs: 15 * 60 * 1000,
-    max: 300,
+    max: 600,
     message: 'Too many requests from this IP, please try again later.',
     standardHeaders: true,
     legacyHeaders: false,
@@ -169,28 +169,28 @@ const limiters = {
     handler: rateLimitJsonHandler,
   }),
 
-  // Move endpoint: 20 per minute (reasonable game speed)
+  // Move endpoint: 60 per minute (1/sec — comfortable for 2048 gameplay)
   moves: rateLimit({
     windowMs: 60 * 1000,
-    max: 20,
+    max: 60,
     message: 'Move limit exceeded, please slow down.',
     skipSuccessfulRequests: true,
     handler: rateLimitJsonHandler,
   }),
 
-  // Deposit endpoint: 10 per hour (prevent spam)
+  // Deposit endpoint: 30 per hour (prevent spam but allow testing)
   deposits: rateLimit({
     windowMs: 60 * 60 * 1000,
-    max: 10,
+    max: 30,
     message: 'Deposit limit exceeded, please try again later.',
     skipSuccessfulRequests: false,
     handler: rateLimitJsonHandler,
   }),
 
-  // Leaderboard: 60 per minute (read-heavy)
+  // Leaderboard: 120 per minute (read-heavy)
   leaderboard: rateLimit({
     windowMs: 60 * 1000,
-    max: 60,
+    max: 120,
     message: 'Leaderboard request limit exceeded.',
     skipSuccessfulRequests: true,
     handler: rateLimitJsonHandler,
@@ -455,6 +455,9 @@ app.post('/api/connect', async (req, res) => {
       console.log(`[Server] User ${userId} RESTORED from database`);
       restoredFromDatabase = true;
       UserBalances.syncFromDatabase(userId, dbUser);
+      if (dbUser.high_score) {
+        userBestScores.set(userId, dbUser.high_score);
+      }
     } else {
       // New user
       console.log(`[Server] New user ${userId} - initializing`);
@@ -569,6 +572,9 @@ app.post('/api/register', async (req, res) => {
     UserBalances.initializeUser(userId, address || userId);
     if (existingUser) {
       UserBalances.syncFromDatabase(userId, existingUser);
+      if (existingUser.high_score) {
+        userBestScores.set(userId, existingUser.high_score);
+      }
     }
     
     const treasuryAddress = getServerWalletAddress();
@@ -825,18 +831,26 @@ app.get('/api/state', async (req, res) => {
   }
 
   try {
-    const state = getSession(userId);
-    const session = sessions.get(userId);
-    
-    // Read from database (source of truth)
+    // Read from database (source of truth) FIRST to seed best score
     const dbUser = await db.getUserStats(userId);
     
     if (dbUser) {
       // Sync DB state to in-memory
       UserBalances.syncFromDatabase(userId, dbUser);
+      if (dbUser.high_score) {
+        userBestScores.set(userId, dbUser.high_score);
+      }
     } else {
       // User has no DB record yet, use in-memory
       UserBalances.initializeUser(userId, userId);
+    }
+
+    const state = getSession(userId);
+    const session = sessions.get(userId);
+    
+    // If DB high score is higher than current session best, adopt it
+    if (dbUser && dbUser.high_score && dbUser.high_score > (state.best || 0)) {
+      state.best = dbUser.high_score;
     }
     
     const user = UserBalances.getBalance(userId);
@@ -849,6 +863,7 @@ app.get('/api/state', async (req, res) => {
       balance: {
         current: UserBalances.centsToUCT(user.balanceCents),
         movesLeft: moves,
+        highScore: dbUser?.high_score || state.best || 0,
         source: 'database'
       },
       ...state.toJSON() 
@@ -883,6 +898,10 @@ app.post('/api/new', async (req, res) => {
 
   try {
     console.log(`[Server] Starting new game for ${userId}`);
+    const dbUserForBest = await db.getUserStats(userId);
+    if (dbUserForBest && dbUserForBest.high_score) {
+      userBestScores.set(userId, dbUserForBest.high_score);
+    }
     const best = userBestScores.get(userId) ?? 0;
     const state = new GameState(best);
     
@@ -894,9 +913,12 @@ app.post('/api/new', async (req, res) => {
       lastBatchTxHash: existing?.lastBatchTxHash || null,
     });
 
-    const dbUser = await db.getUserStats(userId);
+    const dbUser = dbUserForBest || await db.getUserStats(userId);
     if (dbUser) {
       UserBalances.syncFromDatabase(userId, dbUser);
+      if (dbUser.high_score && dbUser.high_score > (state.best || 0)) {
+        state.best = dbUser.high_score;
+      }
     }
     const moves = dbUser
       ? UserBalances.calculateMovesFromAtomic(dbUser.balance || 0)
@@ -910,6 +932,7 @@ app.post('/api/new', async (req, res) => {
           ? UserBalances.atomicToUCT(dbUser.balance || 0)
           : UserBalances.centsToUCT(UserBalances.getBalance(userId).balanceCents),
         movesLeft: moves,
+        highScore: dbUser?.high_score || state.best || 0
       },
       ...state.toJSON() 
     });
@@ -1029,7 +1052,7 @@ app.post('/api/move', limiters.moves, async (req, res) => {
       return res.status(503).json({
         success: false,
         error: 'MOVE_INTEGRITY_ERROR',
-        errorMessage: 'Invalid game state. Please refresh.',
+        errorMessage: 'Game state out of sync. Please refresh to continue.',
         canPlay: false
       });
     }
@@ -1049,6 +1072,17 @@ app.post('/api/move', limiters.moves, async (req, res) => {
       userBestScores.set(userId, state.score);
     }
     UserBalances.updateHighScore(userId, state.score);
+
+    // Persist improved high score to DB immediately (so refresh doesn't lose it)
+    if (state.score > 0) {
+      db.updateHighScoreIfBetter(userId, state.score).then(() => {
+        // Invalidate leaderboard cache so new high scores appear promptly
+        leaderboardCache.data = null;
+        leaderboardCache.timestamp = 0;
+      }).catch(err =>
+        console.warn(`[DB] High score persist failed for ${userId}:`, err.message)
+      );
+    }
 
     const moveBuffer = pushMoveForBatch(userId, {
       moveNo: dbMoveResult.total_moves || Date.now(),

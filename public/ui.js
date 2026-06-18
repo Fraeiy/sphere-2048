@@ -54,7 +54,7 @@ let gameDepositBalance = 0; // In-game deposit balance (deducted per move)
 let moveCount = 0; // Track moves for auto-submit
 
 /** @type {number} */
-const AUTO_SUBMIT_MOVE_COUNT = 10; // Auto-submit after this many moves
+const AUTO_SUBMIT_MOVE_COUNT = 5; // Auto-submit after this many moves (helps persist scores)
 
 /** @type {boolean} */
 let isConnected = false;
@@ -328,9 +328,12 @@ async function syncPlayerBalanceFromServer() {
 
   const balanceData = await balanceResponse.json();
   if (balanceData.balance) {
-    const { current, movesLeft, totalDeposited } = balanceData.balance;
+    const { current, movesLeft, totalDeposited, highScore } = balanceData.balance;
     syncGameDepositFromServer(current);
     currentMovesLeft = movesLeft || 0;
+    if (highScore && bestEl && Number(highScore) > (parseInt(bestEl.textContent || '0', 10) || 0)) {
+      bestEl.textContent = highScore;
+    }
     updateBalanceDisplay();
     console.log(`[Balance] Current: ${current} UCT, Moves left: ${movesLeft}, Total deposited: ${totalDeposited} UCT`);
   }
@@ -387,6 +390,10 @@ async function registerPlayerWithGame(identity) {
     if (connectResponse.ok && connectData?.success && connectData.balance) {
       syncGameDepositFromServer(connectData.balance.current);
       currentMovesLeft = connectData.balance.movesLeft || 0;
+      const hs = connectData.balance.highScore;
+      if (hs && bestEl && Number(hs) > (parseInt(bestEl.textContent || '0', 10) || 0)) {
+        bestEl.textContent = hs;
+      }
       updateBalanceDisplay();
     } else {
       await syncPlayerBalanceFromServer();
@@ -843,15 +850,31 @@ async function depositToPlay(depositAmount) {
                       currentMovesLeft = data.balance?.movesLeft || 0;
                     }
                     moveCount = 0; // Reset move count on new deposit
-                    showMessage(`✅ Deposited ${depositAmount} ${COIN_ID}! In-game balance: ${gameDepositBalance.toFixed(2)} UCT. Moves available: ${currentMovesLeft}`, 'ok');
+                    showMessage(`✅ Deposit received! Sent from your wallet. +${depositAmount} UCT to game. Moves: ${currentMovesLeft}`, 'ok');
                     sessionStorage.setItem(DEPOSIT_KEY, 'true');
                     updateBalanceDisplay();
-                    checkBalance().catch(err => console.error('Balance check failed:', err));
+                    // Force authoritative refresh from server game balance (not personal wallet)
+                    fetch(`/api/balance?userId=${encodeURIComponent(userId)}`)
+                      .then(r => r.json())
+                      .then(b => {
+                        if (b?.balance) {
+                          if (b.balance.current !== undefined) syncGameDepositFromServer(b.balance.current);
+                          if (b.balance.movesLeft !== undefined) currentMovesLeft = b.balance.movesLeft;
+                          updateBalanceDisplay();
+                        }
+                      })
+                      .catch(() => {});
+                    // Also query personal wallet (will show reduced after spend)
+                    checkBalance().catch(err => console.error('Personal wallet balance check failed:', err));
                     resolve(true);
                   })
                   .catch((err) => {
                     console.error('[Deposit] Backend credit failed:', err);
-                    showMessage(`❌ Deposit recorded in wallet but failed to credit game balance: ${err.message}`, 'err');
+                    showMessage(`❌ Tx sent from wallet but game credit failed: ${err.message}. Try refresh or contact support.`, 'err');
+                    // Still attempt to pull latest game balance in case partial success
+                    fetch(`/api/balance?userId=${encodeURIComponent(userId)}`).then(r=>r.json()).then(b=>{
+                      if (b?.balance?.current) { syncGameDepositFromServer(b.balance.current); currentMovesLeft = b.balance.movesLeft||0; updateBalanceDisplay(); }
+                    }).catch(()=>{});
                     resolve(false);
                   });
               }
@@ -1032,7 +1055,11 @@ async function api(path, options = {}) {
 
   if (!res.ok) {
     console.error('[API] Server error:', { path, status: res.status, data, rawBody });
-    throw new Error(data?.errorMessage || data?.error || rawBody || `API ${path} → ${res.status}`);
+    const msg = data?.errorMessage || data?.error || rawBody || `API ${path} → ${res.status}`;
+    if (res.status === 429 || data?.error === 'RATE_LIMITED') {
+      throw new Error('Too many requests — slow down and try again in a moment.');
+    }
+    throw new Error(msg);
   }
 
   if (data && typeof data.success === 'boolean' && !data.success) {
@@ -1260,6 +1287,10 @@ function applyState(state) {
         console.error('Auto-submit when moves=0 failed:', err)
       );
     }
+  }
+  // Seed BEST from server authoritative highScore if provided and higher (survives refresh)
+  if (state.balance?.highScore && Number(state.balance.highScore) > (parseInt(bestEl?.textContent || '0', 10) || 0)) {
+    if (bestEl) bestEl.textContent = state.balance.highScore;
   }
   
   // Log balance info from state

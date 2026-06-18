@@ -270,16 +270,26 @@ export async function deductMove(userId, direction = 'unknown', score = 0) {
   }
 
   const now = Date.now();
-  const newBalance = user.balance - MOVE_COST_ATOMIC;
   const moveNumber = (user.total_moves || 0) + 1;
 
-  // Deduct from balance, increment move count
-  await run(
-    `UPDATE users 
-     SET balance = ?, total_moves = total_moves + 1, last_move = ?, updated_at = ?
-     WHERE user_id = ?`,
-    [newBalance, now, now, userId]
-  );
+  // Atomic deduct using WHERE guard to prevent overdraft on races
+  const result = await new Promise((resolve, reject) => {
+    db.run(
+      `UPDATE users 
+       SET balance = balance - ?, total_moves = total_moves + 1, last_move = ?, updated_at = ?
+       WHERE user_id = ? AND balance >= ?`,
+      [MOVE_COST_ATOMIC, now, now, userId, MOVE_COST_ATOMIC],
+      function (err) {
+        if (err) reject(err);
+        else resolve({ changes: this.changes });
+      }
+    );
+  });
+
+  if (!result.changes || result.changes === 0) {
+    console.log(`[DB] Move overdraft prevented for ${userId}`);
+    return null;
+  }
 
   // Log move to moves table for blockchain audit trail
   await run(
@@ -289,6 +299,7 @@ export async function deductMove(userId, direction = 'unknown', score = 0) {
   );
 
   const updatedUser = await get('SELECT * FROM users WHERE user_id = ?', [userId]);
+  const newBalance = updatedUser ? updatedUser.balance : 0;
   const balanceCents = Math.round(newBalance / 1e16);
   const movesRemaining = Math.floor(balanceCents / 10);
   
@@ -329,6 +340,25 @@ export async function submitScore(userId, score, movesUsed = 0) {
   console.log(`[DB] Score submitted: ${userId} → ${score}`);
 
   return { user_id: userId, score, moves_used: movesUsed, timestamp: now };
+}
+
+/**
+ * Update high score for user if the new score is higher. Does not insert history row.
+ * Use for frequent in-game high score updates during play.
+ */
+export async function updateHighScoreIfBetter(userId, score) {
+  if (!score || score <= 0) return null;
+  const user = await getOrCreateUser(userId);
+  const now = Date.now();
+  if (score > (user.high_score || 0)) {
+    await run(
+      'UPDATE users SET high_score = ?, updated_at = ? WHERE user_id = ?',
+      [score, now, userId]
+    );
+    console.log(`[DB] High score updated: ${userId} → ${score}`);
+    return { user_id: userId, high_score: score };
+  }
+  return null;
 }
 
 /**

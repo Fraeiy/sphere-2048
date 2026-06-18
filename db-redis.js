@@ -255,6 +255,22 @@ export async function submitScore(userId, score, movesUsed = 0) {
   return scoreRecord;
 }
 
+/**
+ * Update high score for user if the new score is higher. Does not insert history row.
+ */
+export async function updateHighScoreIfBetter(userId, score) {
+  if (!score || score <= 0) return null;
+  const user = await getOrCreateUser(userId);
+  if (score > (user.high_score || 0)) {
+    user.high_score = score;
+    await writeUser(user);
+    await updateLeaderboardIndex(userId, score);
+    console.log(`[DB] High score updated: ${userId} → ${score}`);
+    return { user_id: userId, high_score: score };
+  }
+  return null;
+}
+
 function formatLeaderboardRows(users, limit) {
   return users
     .filter((user) => user?.high_score > 0)

@@ -239,6 +239,28 @@ export async function submitScore(userId, score, movesUsed = 0) {
 }
 
 /**
+ * Update high score for user if the new score is higher. Lightweight, no history row.
+ */
+export async function updateHighScoreIfBetter(userId, score) {
+  if (!score || score <= 0) return null;
+  const user = await getOrCreateUser(userId);
+  const now = Date.now();
+  if (score > (user.high_score || 0)) {
+    user.high_score = score;
+    user.updated_at = now;
+    const userKey = `user:${userId}`;
+    if (IN_MEMORY) {
+      memoryStore.users.set(userId, user);
+    } else {
+      await kv.set(userKey, user);
+    }
+    console.log(`[DB] High score updated: ${userId} → ${score}`);
+    return { user_id: userId, high_score: score };
+  }
+  return null;
+}
+
+/**
  * Get user's stats
  */
 export async function getUserStats(userId) {
