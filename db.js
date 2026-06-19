@@ -36,11 +36,42 @@ export async function initDatabase() {
         return;
       }
       console.log(`[DB] Connected to SQLite at ${DB_PATH}`);
+
+      const shouldClear = process.env.CLEAR_DB === 'true' || process.env.CLEAR_DB === '1';
+      if (shouldClear) {
+        console.log('[DB] CLEAR_DB flag detected - wiping all data for fresh start...');
+        clearAllData()
+          .then(() => createTables())
+          .then(() => {
+            console.log('[DB] Database cleared and recreated fresh.');
+            resolve();
+          })
+          .catch(reject);
+        return;
+      }
+
       createTables()
         .then(() => resolve())
         .catch(reject);
     });
   });
+}
+
+export async function clearAllData() {
+  if (!db) {
+    console.warn('[DB] Cannot clear - DB not initialized');
+    return;
+  }
+  console.log('[DB] Dropping all tables for reset...');
+  const tables = ['moves', 'deposits', 'scores', 'users'];
+  for (const table of tables) {
+    try {
+      await run(`DROP TABLE IF EXISTS ${table}`);
+      console.log(`[DB] Dropped table: ${table}`);
+    } catch (e) {
+      console.warn(`[DB] Could not drop ${table}:`, e.message);
+    }
+  }
 }
 
 /**

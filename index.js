@@ -853,17 +853,20 @@ app.get('/api/state', async (req, res) => {
       state.best = dbUser.high_score;
     }
     
-    const user = UserBalances.getBalance(userId);
-    const moves = UserBalances.calculateMoves(user.balanceCents);
+    // REWIRE: Prefer direct computation from fresh DB row
+    const balAtomic = (dbUser && dbUser.balance) || 0;
+    const moves = UserBalances.calculateMovesFromAtomic(balAtomic);
+    const balDisplay = UserBalances.atomicToUCT(balAtomic);
+    const hs = (dbUser && dbUser.high_score) || state.best || 0;
 
     res.json({ 
       userId,
       canPlay: moves > 0,
       lastBatchTxHash: session?.lastBatchTxHash || null,
       balance: {
-        current: UserBalances.centsToUCT(user.balanceCents),
+        current: balDisplay,
         movesLeft: moves,
-        highScore: dbUser?.high_score || state.best || 0,
+        highScore: hs,
         source: 'database'
       },
       ...state.toJSON() 
@@ -1075,13 +1078,16 @@ app.post('/api/move', limiters.moves, async (req, res) => {
 
     // Persist improved high score to DB immediately (so refresh doesn't lose it)
     if (state.score > 0) {
-      db.updateHighScoreIfBetter(userId, state.score).then(() => {
-        // Invalidate leaderboard cache so new high scores appear promptly
-        leaderboardCache.data = null;
-        leaderboardCache.timestamp = 0;
-      }).catch(err =>
-        console.warn(`[DB] High score persist failed for ${userId}:`, err.message)
-      );
+      try {
+        const hsUpdated = await db.updateHighScoreIfBetter(userId, state.score);
+        if (hsUpdated) {
+          leaderboardCache.data = null;
+          leaderboardCache.timestamp = 0;
+          console.log(`[Score] High score persisted for ${userId}: ${state.score}`);
+        }
+      } catch (err) {
+        console.warn(`[DB] High score persist failed for ${userId}:`, err.message);
+      }
     }
 
     const moveBuffer = pushMoveForBatch(userId, {
@@ -1118,17 +1124,21 @@ app.post('/api/move', limiters.moves, async (req, res) => {
       };
     }
 
-    const user = UserBalances.getBalance(userId);
-    const movesRemaining = UserBalances.calculateMoves(user?.balanceCents || 0);
+    // REWIRE: Compute balance/moves/highScore directly from the fresh DB result for accuracy
+    const postDeductAtomic = dbMoveResult.balance || 0;
+    const postMoves = UserBalances.calculateMovesFromAtomic(postDeductAtomic);
+    const postCurrent = UserBalances.atomicToUCT(postDeductAtomic);
+    const postHigh = dbMoveResult.high_score || state.best || 0;
 
     res.json({ 
       success: true,
       userId,
       moved,
-      canPlay: movesRemaining > 0,
+      canPlay: postMoves > 0,
       balance: {
-        current: UserBalances.centsToUCT(user?.balanceCents || 0),
-        movesLeft: movesRemaining
+        current: postCurrent,
+        movesLeft: postMoves,
+        highScore: postHigh
       },
       moveBatch: batchTx,
       ...state.toJSON() 

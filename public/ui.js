@@ -1288,9 +1288,14 @@ function applyState(state) {
       );
     }
   }
-  // Seed BEST from server authoritative highScore if provided and higher (survives refresh)
-  if (state.balance?.highScore && Number(state.balance.highScore) > (parseInt(bestEl?.textContent || '0', 10) || 0)) {
-    if (bestEl) bestEl.textContent = state.balance.highScore;
+  // Always prefer server authoritative highScore for BEST display if higher (fixes missing high scores on refresh)
+  const serverHigh = state.balance?.highScore ?? state.highScore;
+  if (serverHigh != null) {
+    const serverBest = Number(serverHigh) || 0;
+    const currentBest = parseInt(bestEl?.textContent || '0', 10) || 0;
+    if (serverBest > currentBest) {
+      if (bestEl) bestEl.textContent = serverBest;
+    }
   }
   
   // Log balance info from state
@@ -1479,6 +1484,12 @@ async function doMove(direction) {
       lastBalanceSyncTime = Date.now();
       console.log(`[Move] Synced moves: ${currentMovesLeft}`);
     }
+
+    // Force sync game balance display and moves from the authoritative server response
+    if (state.balance?.current !== undefined) {
+      syncGameDepositFromServer(state.balance.current);
+    }
+    updateBalanceDisplay();
 
     if (!state.moved) {
       showMessage('No tiles moved — try another direction.', 'warn');
