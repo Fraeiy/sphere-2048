@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/Button';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useSphereWallet } from '@/hooks/useSphereWallet';
+import { getTreasuryRecipient } from '@/lib/treasury';
 
 const TIERS = [
   { amount: 1, moves: 50, label: 'Starter' },
@@ -12,7 +13,7 @@ const TIERS = [
   { amount: 10, moves: 700, label: 'Pro' },
 ];
 
-const TREASURY = import.meta.env.VITE_GAME_TREASURY_ADDRESS ?? '';
+const TREASURY = getTreasuryRecipient();
 
 export function DepositPage() {
   const navigate = useNavigate();
@@ -76,8 +77,8 @@ export function DepositPage() {
       {error && <p className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">{error}</p>}
 
       <p className="text-center text-xs text-ink-soft">
-        Opens Sphere to send <strong>UCT</strong> (testnet2). The wallet may show the amount in base units
-        (e.g. 10 UCT appears as 10000000000000000000) — that is normal.
+        Sends <strong>UCT</strong> to <strong>{TREASURY}</strong> on testnet2. The wallet may show the amount in
+        base units (e.g. 10 UCT = 10000000000000000000) — that is normal.
       </p>
 
       <Button onClick={handleDeposit} disabled={loading || !TREASURY} className="w-full">

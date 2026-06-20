@@ -8,6 +8,7 @@ import { autoConnect, detectTransport, type AutoConnectResult } from '@unicityla
 import { uctToAtomic } from '@sphere-2048/shared';
 import { api } from '@/lib/api';
 import { resolveUctCoinId } from '@/lib/resolveUctCoin';
+import { formatTreasuryRecipient } from '@/lib/treasury';
 import { walletSession } from '@/lib/walletSession';
 import { useAuthStore } from '@/stores/authStore';
 
@@ -145,12 +146,13 @@ export function useSphereWallet() {
     clearStaleSessions();
   }, [clearSession]);
 
-  const sendDeposit = useCallback(async (amountUct: number, treasuryAddress: string, memo: string) => {
+  const sendDeposit = useCallback(async (amountUct: number, treasuryRecipient: string, memo: string) => {
     const client = await ensureWalletClient();
     const coinId = await resolveUctCoinId(client);
+    const to = formatTreasuryRecipient(treasuryRecipient);
 
     const result = await client.intent<{ txHash?: string; hash?: string }>('send', {
-      to: treasuryAddress,
+      to,
       amount: uctToAtomic(amountUct).toString(),
       coinId,
       memo,
