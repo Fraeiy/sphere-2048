@@ -4,7 +4,7 @@
 $ProjectRef = "qikjgngheylczoqwspgl"
 $PublishableKey = "sb_publishable_SY0DS7OaTs9LgW6CbLyBAw_kKVqGCmv"
 $DbPassword = Read-Host "Postgres password (from Supabase Dashboard → Database)"
-$ServiceRoleKey = Read-Host "service_role / secret key (Dashboard → API)"
+$ServiceRoleKey = Read-Host "sb_secret_ key (Dashboard → API → Secret keys)"
 $JwtSecret = Read-Host "JWT Secret (Dashboard → API → JWT Settings)"
 $FrontendUrl = "https://sphere-2048.vercel.app"
 $CronSecret = [guid]::NewGuid().ToString("N")
