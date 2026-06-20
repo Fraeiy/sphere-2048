@@ -3,6 +3,10 @@ dist
 .env
 .env.local
 .env.*.local
+apps/web/.env
+supabase/.env
+supabase/.temp/
+scripts/combined-migration.sql
 
 # Wallet credential files – must never be committed
 wallets.json

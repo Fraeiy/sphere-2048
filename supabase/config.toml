@@ -1,0 +1,39 @@
+# Supabase CLI config — project ref: qikjgngheylczoqwspgl
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public"]
+extra_search_path = ["public"]
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[functions.register-player]
+verify_jwt = false
+
+[functions.start-game]
+verify_jwt = false
+
+[functions.execute-move]
+verify_jwt = false
+
+[functions.process-deposit]
+verify_jwt = false
+
+[functions.get-leaderboard]
+verify_jwt = false
+
+[functions.get-weekly-pool]
+verify_jwt = false
+
+[functions.settle-weekly-round]
+verify_jwt = false
+
+[functions.end-game]
+verify_jwt = false

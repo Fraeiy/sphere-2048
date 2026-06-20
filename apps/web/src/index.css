@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg-base: #fff6ea;
+  --color-bg-accent: #ffd6ad;
+  --color-ink: #5b3d2a;
+  --color-ink-soft: #7b5b45;
+  --color-orange-700: #cc5200;
+  --color-orange-600: #e56717;
+  --color-orange-500: #f47a20;
+  --color-orange-400: #ff9a3c;
+  --color-cream-100: #fff3e5;
+  --color-tile-empty: rgba(255, 242, 227, 0.55);
+  --font-display: 'Trebuchet MS', 'Avenir Next', 'Segoe UI', sans-serif;
+}
+
+body {
+  font-family: var(--font-display);
+  background:
+    radial-gradient(circle at 12% 10%, #fff0d8 0%, transparent 38%),
+    radial-gradient(circle at 88% 86%, #ffd9b7 0%, transparent 32%),
+    linear-gradient(160deg, var(--color-bg-base), var(--color-bg-accent));
+  color: var(--color-ink-soft);
+  min-height: 100vh;
+}
