@@ -5,7 +5,7 @@ import { useAuthStore } from '@/stores/authStore';
 
 export function ConnectPage() {
   const navigate = useNavigate();
-  const { connect, connecting } = useSphereWallet();
+  const { connect, connecting, connectError } = useSphereWallet();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated());
 
   async function handleConnect() {
@@ -25,6 +25,10 @@ export function ConnectPage() {
         Authentication uses Sphere SDK only. Your DID and L1 wallet address become your player identity.
         No email or password required.
       </p>
+      {connectError && (
+        <p className="max-w-sm rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">{connectError}</p>
+      )}
+
       <Button onClick={handleConnect} disabled={connecting}>
         {connecting ? 'Connecting…' : '🔗 Connect Wallet'}
       </Button>
