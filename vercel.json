@@ -1,9 +1,6 @@
 {
-  "framework": "node",
-  "buildCommand": "npm ci --only=production",
-  "installCommand": "npm ci",
-  "outputDirectory": ".",
-  "routes": [
-    { "src": "/(.*)", "dest": "index.js" }
-  ]
+  "installCommand": "cd apps/web && npm install",
+  "buildCommand": "cd apps/web && npm run build",
+  "outputDirectory": "apps/web/dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }
