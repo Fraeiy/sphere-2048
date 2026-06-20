@@ -72,7 +72,8 @@ export interface ProcessDepositRequest {
   player_id: string;
   wallet_address: string;
   tx_hash: string;
-  amount_atomic: number;
+  /** UCT atomic units as string (18 decimals) — avoids JS Number overflow above ~9 UCT */
+  amount_atomic: string;
   memo?: string;
   block_time?: string;
 }
@@ -82,7 +83,7 @@ export interface ProcessDepositResponse {
   moves_credited: number;
   move_balance: MoveBalance;
   credit_tier: CreditTier | null;
-  prize_pool_contribution: number;
+  prize_pool_contribution: string;
 }
 
 export interface LeaderboardQuery {
@@ -98,7 +99,7 @@ export interface LeaderboardResponse {
 
 export interface WeeklyPoolResponse {
   round: WeeklyRound;
-  prize_pool_atomic: number;
+  prize_pool_atomic: string | number;
   deposit_count: number;
   top_entries: LeaderboardEntry[];
   pending_payouts: number;

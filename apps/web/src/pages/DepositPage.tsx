@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { uctToAtomic } from '@sphere-2048/shared';
 import { Button } from '@/components/ui/Button';
@@ -22,10 +22,37 @@ export function DepositPage() {
   const [selected, setSelected] = useState(10);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [pendingTx, setPendingTx] = useState<{ txHash: string; amount: number; memo: string } | null>(null);
+
+  useEffect(() => {
+    const raw = sessionStorage.getItem('sphere2048-pending-deposit');
+    if (raw) {
+      try {
+        setPendingTx(JSON.parse(raw) as { txHash: string; amount: number; memo: string });
+      } catch {
+        sessionStorage.removeItem('sphere2048-pending-deposit');
+      }
+    }
+  }, []);
 
   if (!isAuthenticated()) {
     navigate('/connect');
     return null;
+  }
+
+  async function creditDeposit(txHash: string, amount: number, memo: string) {
+    if (!accessToken || !player) return;
+    const result = await api.processDeposit(accessToken, {
+      player_id: player.id,
+      wallet_address: useAuthStore.getState().wallet!.address,
+      tx_hash: txHash,
+      amount_atomic: uctToAtomic(amount).toString(),
+      memo,
+    });
+    setMoveBalance(result.move_balance);
+    setPendingTx(null);
+    sessionStorage.removeItem('sphere2048-pending-deposit');
+    navigate('/play');
   }
 
   async function handleDeposit() {
@@ -35,17 +62,25 @@ export function DepositPage() {
     try {
       const memo = `2048:${player.did}`;
       const { txHash } = await sendDeposit(selected, TREASURY, memo);
-      const result = await api.processDeposit(accessToken, {
-        player_id: player.id,
-        wallet_address: useAuthStore.getState().wallet!.address,
-        tx_hash: txHash,
-        amount_atomic: Number(uctToAtomic(selected)),
-        memo,
-      });
-      setMoveBalance(result.move_balance);
-      navigate('/play');
+      const pending = { txHash, amount: selected, memo };
+      setPendingTx(pending);
+      sessionStorage.setItem('sphere2048-pending-deposit', JSON.stringify(pending));
+      await creditDeposit(txHash, selected, memo);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Deposit failed');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleRetryCredit() {
+    if (!pendingTx) return;
+    setLoading(true);
+    setError('');
+    try {
+      await creditDeposit(pendingTx.txHash, pendingTx.amount, pendingTx.memo);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Credit failed');
     } finally {
       setLoading(false);
     }
@@ -74,7 +109,22 @@ export function DepositPage() {
         ))}
       </div>
 
-      {error && <p className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">{error}</p>}
+      {error && (
+        <div className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">
+          <p>{error}</p>
+          {pendingTx && (
+            <p className="mt-2 text-xs">
+              Your wallet transfer may have succeeded. Tap <strong>Retry credit</strong> below — no second payment needed.
+            </p>
+          )}
+        </div>
+      )}
+
+      {pendingTx && error && (
+        <Button onClick={handleRetryCredit} disabled={loading} variant="secondary" className="w-full">
+          {loading ? 'Crediting…' : `Retry credit (${pendingTx.amount} UCT)`}
+        </Button>
+      )}
 
       <p className="text-center text-xs text-ink-soft">
         Sends <strong>UCT</strong> to <strong>{TREASURY}</strong> on testnet2. The wallet may show the amount in
