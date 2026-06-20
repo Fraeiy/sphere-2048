@@ -28,13 +28,18 @@ Deno.serve(async (req) => {
 
     const { data: activeSession } = await supabase
       .from('game_sessions')
-      .select('id')
+      .select('*')
       .eq('player_id', claims.player_id)
       .eq('status', 'active')
       .maybeSingle();
 
     if (activeSession) {
-      return errorResponse('SESSION_EXISTS', 'Complete or abandon the active session first', 409);
+      const { data: fullBalance } = await supabase
+        .from('move_balances')
+        .select('*')
+        .eq('player_id', claims.player_id)
+        .single();
+      return jsonResponse({ session: activeSession, move_balance: fullBalance });
     }
 
     const { data: roundId } = await supabase.rpc('get_active_weekly_round');

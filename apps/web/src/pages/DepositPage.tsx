@@ -35,10 +35,9 @@ export function DepositPage() {
     }
   }, []);
 
-  if (!isAuthenticated()) {
-    navigate('/connect');
-    return null;
-  }
+  useEffect(() => {
+    if (!isAuthenticated()) navigate('/connect', { replace: true });
+  }, [isAuthenticated, navigate]);
 
   async function creditDeposit(txHash: string, amount: number, memo: string) {
     if (!accessToken || !player) return;
@@ -52,7 +51,7 @@ export function DepositPage() {
     setMoveBalance(result.move_balance);
     setPendingTx(null);
     sessionStorage.removeItem('sphere2048-pending-deposit');
-    navigate('/play');
+    navigate('/play', { replace: true });
   }
 
   async function handleDeposit() {

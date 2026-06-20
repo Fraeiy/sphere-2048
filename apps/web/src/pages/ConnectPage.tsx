@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
 import { useSphereWallet } from '@/hooks/useSphereWallet';
@@ -13,10 +14,9 @@ export function ConnectPage() {
     if (ok) navigate('/deposit');
   }
 
-  if (isAuthenticated) {
-    navigate('/play');
-    return null;
-  }
+  useEffect(() => {
+    if (isAuthenticated) navigate('/play', { replace: true });
+  }, [isAuthenticated, navigate]);
 
   return (
     <section className="flex flex-col items-center gap-5 text-center">

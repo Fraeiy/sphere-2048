@@ -1,44 +1,56 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Board } from '@sphere-2048/game';
 import { GameBoard } from '@/components/game/GameBoard';
 import { ScoreBox } from '@/components/game/ScoreBox';
 import { Button } from '@/components/ui/Button';
+import { useAuthHydrated } from '@/hooks/useAuthHydrated';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useGameStore } from '@/stores/gameStore';
 
 export function GamePage() {
   const navigate = useNavigate();
+  const hydrated = useAuthHydrated();
   const { accessToken, moveBalance, setMoveBalance, isAuthenticated } = useAuthStore();
   const { session, setSession } = useGameStore();
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const [best, setBest] = useState(0);
+  const startingRef = useRef(false);
 
   useEffect(() => {
+    if (!hydrated) return;
     if (!isAuthenticated()) navigate('/connect');
     else if ((moveBalance?.credits_remaining ?? 0) <= 0) navigate('/deposit');
-  }, [isAuthenticated, moveBalance, navigate]);
+  }, [hydrated, isAuthenticated, moveBalance, navigate]);
 
   const startGame = useCallback(async () => {
-    if (!accessToken) return;
+    if (!accessToken || startingRef.current) return;
+    startingRef.current = true;
     setBusy(true);
+    setError('');
     try {
       const result = await api.startGame(accessToken);
       setSession(result.session);
       setMoveBalance(result.move_balance);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start game');
     } finally {
       setBusy(false);
+      startingRef.current = false;
     }
   }, [accessToken, setSession, setMoveBalance]);
 
   useEffect(() => {
-    if (!session && accessToken) startGame();
-  }, [session, accessToken, startGame]);
+    if (!hydrated || !accessToken || session) return;
+    startGame();
+  }, [hydrated, accessToken, session, startGame]);
 
   const handleMove = useCallback(async (direction: 'left' | 'right' | 'up' | 'down') => {
     if (!accessToken || !session || busy) return;
     setBusy(true);
+    setError('');
     try {
       const result = await api.executeMove(accessToken, {
         session_id: session.id,
@@ -48,6 +60,8 @@ export function GamePage() {
       setSession(result.session);
       setMoveBalance(result.move_balance);
       if (result.session.score > best) setBest(result.session.score);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Move failed');
     } finally {
       setBusy(false);
     }
@@ -64,8 +78,12 @@ export function GamePage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [handleMove]);
 
-  if (!session) {
-    return <p className="text-center text-sm">Starting game…</p>;
+  if (!hydrated || !session) {
+    return (
+      <p className="text-center text-sm text-ink-soft">
+        {error || 'Starting game…'}
+      </p>
+    );
   }
 
   return (
@@ -80,6 +98,10 @@ export function GamePage() {
           <ScoreBox label="BEST" value={best} />
         </div>
       </div>
+
+      {error && (
+        <p className="w-full rounded-lg bg-red-100 px-3 py-2 text-center text-sm text-red-800">{error}</p>
+      )}
 
       <GameBoard board={session.board_state as Board} onMove={handleMove} disabled={busy} />
 

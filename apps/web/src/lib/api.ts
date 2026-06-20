@@ -39,8 +39,18 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  startGame: (token: string) =>
-    edgeFetch<StartGameResponse>('start-game', { method: 'POST', body: '{}', token }),
+  startGame: (() => {
+    let inflight: Promise<StartGameResponse> | null = null;
+    let inflightToken: string | null = null;
+    return (token: string) => {
+      if (inflight && inflightToken === token) return inflight;
+      inflightToken = token;
+      inflight = edgeFetch<StartGameResponse>('start-game', { method: 'POST', body: '{}', token }).finally(
+        () => { inflight = null; inflightToken = null; },
+      );
+      return inflight;
+    };
+  })(),
 
   executeMove: (token: string, payload: ExecuteMoveRequest) =>
     edgeFetch<ExecuteMoveResponse>('execute-move', {
