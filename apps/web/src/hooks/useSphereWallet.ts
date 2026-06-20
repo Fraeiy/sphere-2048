@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ERROR_CODES,
   SPHERE_NETWORKS,
@@ -7,6 +7,7 @@ import type { PublicIdentity } from '@unicitylabs/sphere-sdk/connect';
 import { autoConnect, detectTransport, type AutoConnectResult } from '@unicitylabs/sphere-sdk/connect/browser';
 import { uctToAtomic } from '@sphere-2048/shared';
 import { api } from '@/lib/api';
+import { walletSession } from '@/lib/walletSession';
 import { useAuthStore } from '@/stores/authStore';
 
 const WALLET_URL = import.meta.env.VITE_SPHERE_WALLET_URL ?? 'https://sphere.unicity.network';
@@ -60,11 +61,12 @@ function clearStaleSessions() {
   sessionStorage.removeItem('sphere2048-session');
 }
 
-async function connectWallet(): Promise<AutoConnectResult> {
+async function connectWallet(resumeSessionId?: string): Promise<AutoConnectResult> {
   const base = {
     dapp: DAPP,
     walletUrl: WALLET_URL,
     network: SPHERE_NETWORKS.testnet2,
+    ...(resumeSessionId ? { resumeSessionId } : {}),
   };
 
   try {
@@ -78,10 +80,27 @@ async function connectWallet(): Promise<AutoConnectResult> {
   }
 }
 
+/** Ensure a live ConnectClient — reconnects using saved session if needed (e.g. after page refresh). */
+async function ensureWalletClient() {
+  if (walletSession.hasConnectedClient()) {
+    return walletSession.get()!.client;
+  }
+
+  const resumeSessionId = sessionStorage.getItem(SESSION_KEY) ?? undefined;
+  if (!resumeSessionId) {
+    throw new Error('Wallet not connected — go back to Connect and link your wallet');
+  }
+
+  await walletSession.clear();
+  const wallet = await connectWallet(resumeSessionId);
+  walletSession.set(wallet);
+  sessionStorage.setItem(SESSION_KEY, wallet.connection.sessionId);
+  return wallet.client;
+}
+
 export function useSphereWallet() {
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
-  const sessionRef = useRef<AutoConnectResult | null>(null);
   const { setSession, clearSession } = useAuthStore();
 
   const connect = useCallback(async (): Promise<boolean> => {
@@ -90,13 +109,10 @@ export function useSphereWallet() {
     clearStaleSessions();
 
     try {
-      if (sessionRef.current) {
-        await sessionRef.current.disconnect().catch(() => undefined);
-        sessionRef.current = null;
-      }
+      await walletSession.clear();
 
       const wallet = await connectWallet();
-      sessionRef.current = wallet;
+      walletSession.set(wallet);
       sessionStorage.setItem(SESSION_KEY, wallet.connection.sessionId);
 
       const identity = toSphereIdentity(wallet.connection.identity);
@@ -117,10 +133,7 @@ export function useSphereWallet() {
     } catch (err) {
       console.error('[SphereWallet]', err, { origin: location.origin, transport: detectTransport() });
       setConnectError(formatConnectError(err));
-      if (sessionRef.current) {
-        await sessionRef.current.disconnect().catch(() => undefined);
-        sessionRef.current = null;
-      }
+      await walletSession.clear();
       clearStaleSessions();
       return false;
     } finally {
@@ -129,17 +142,13 @@ export function useSphereWallet() {
   }, [setSession]);
 
   const disconnect = useCallback(async () => {
-    if (sessionRef.current) {
-      await sessionRef.current.disconnect().catch(() => undefined);
-      sessionRef.current = null;
-    }
+    await walletSession.clear();
     clearSession();
     clearStaleSessions();
   }, [clearSession]);
 
   const sendDeposit = useCallback(async (amountUct: number, treasuryAddress: string, memo: string) => {
-    const client = sessionRef.current?.client;
-    if (!client?.isConnected) throw new Error('Wallet not connected');
+    const client = await ensureWalletClient();
 
     const result = await client.intent<{ txHash?: string; hash?: string }>('send', {
       to: treasuryAddress,

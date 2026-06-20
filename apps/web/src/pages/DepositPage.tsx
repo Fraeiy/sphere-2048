@@ -75,8 +75,12 @@ export function DepositPage() {
 
       {error && <p className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">{error}</p>}
 
+      <p className="text-center text-xs text-ink-soft">
+        Opens Sphere to sign the transfer — keep the wallet popup open if prompted.
+      </p>
+
       <Button onClick={handleDeposit} disabled={loading || !TREASURY} className="w-full">
-        {loading ? 'Processing…' : `Deposit ${selected} UCT`}
+        {loading ? 'Opening wallet…' : `Deposit ${selected} UCT`}
       </Button>
     </section>
   );
