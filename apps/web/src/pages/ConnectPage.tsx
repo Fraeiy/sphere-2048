@@ -22,8 +22,7 @@ export function ConnectPage() {
     <section className="flex flex-col items-center gap-5 text-center">
       <h2 className="text-2xl font-extrabold text-ink">Connect Sphere Wallet</h2>
       <p className="max-w-sm text-sm text-ink-soft">
-        Authentication uses Sphere SDK only. Your DID and L1 wallet address become your player identity.
-        No email or password required.
+        Connects via Sphere Connect v2 on testnet2. Your nametag or wallet address becomes your player ID.
       </p>
       {connectError && (
         <p className="max-w-sm rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">{connectError}</p>

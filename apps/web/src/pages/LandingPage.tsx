@@ -29,7 +29,6 @@ export function LandingPage() {
           <Link to="/connect"><Button>Connect Wallet</Button></Link>
         )}
         <Link to="/leaderboard"><Button variant="secondary">Leaderboard</Button></Link>
-        <Link to="/weekly-pool"><Button variant="secondary">Weekly Pool</Button></Link>
       </div>
     </section>
   );

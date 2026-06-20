@@ -1,33 +1,37 @@
 import { useEffect, useState } from 'react';
+import { atomicToUct } from '@sphere-2048/shared';
 import { LeaderboardTable } from '@/components/leaderboard/LeaderboardTable';
 import { api } from '@/lib/api';
-import { subscribeLeaderboard } from '@/lib/supabase';
-import type { LeaderboardEntry } from '@sphere-2048/shared';
+import type { LeaderboardEntry, WeeklyPoolResponse } from '@sphere-2048/shared';
 
 export function LeaderboardPage() {
   const [tab, setTab] = useState<'global' | 'weekly'>('global');
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
+  const [pool, setPool] = useState<WeeklyPoolResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
   useEffect(() => {
     setLoading(true);
-    api.getLeaderboard(tab)
-      .then((res) => setEntries(res.entries))
+    setError('');
+
+    const leaderboard = api.getLeaderboard(tab);
+    const poolReq = tab === 'weekly' ? api.getWeeklyPool() : Promise.resolve(null);
+
+    Promise.all([leaderboard, poolReq])
+      .then(([lb, poolData]) => {
+        setEntries(lb.entries);
+        setPool(poolData);
+      })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-
-    return subscribeLeaderboard(tab, (row) => {
-      setEntries((prev) => {
-        const next = [{ ...(row as LeaderboardEntry) }, ...prev];
-        return next.sort((a, b) => b.score - a.score).slice(0, 50);
-      });
-    });
   }, [tab]);
+
+  const poolUct = pool ? atomicToUct(BigInt(pool.prize_pool_atomic)) : 0;
 
   return (
     <section className="flex flex-col gap-4">
-      <h2 className="text-center text-2xl font-extrabold text-ink">🏆 Leaderboard</h2>
+      <h2 className="text-center text-2xl font-extrabold text-ink">Leaderboard</h2>
 
       <div className="flex justify-center gap-2">
         {(['global', 'weekly'] as const).map((t) => (
@@ -43,6 +47,13 @@ export function LeaderboardPage() {
           </button>
         ))}
       </div>
+
+      {tab === 'weekly' && pool && (
+        <div className="rounded-lg border border-[#f2d2ae] bg-[#fff0de] p-3 text-center">
+          <p className="text-xs text-ink-soft">Weekly prize pool · round #{pool.round.round_number}</p>
+          <p className="text-2xl font-black text-orange-600">{poolUct.toFixed(2)} UCT</p>
+        </div>
+      )}
 
       {loading && <p className="text-center text-sm">Loading…</p>}
       {error && <p className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">{error}</p>}
