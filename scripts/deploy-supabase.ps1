@@ -2,6 +2,7 @@
 # Run from repo root in PowerShell after filling secrets below.
 
 $ProjectRef = "qikjgngheylczoqwspgl"
+$PublishableKey = "sb_publishable_SY0DS7OaTs9LgW6CbLyBAw_kKVqGCmv"
 $DbPassword = Read-Host "Postgres password (from Supabase Dashboard → Database)"
 $ServiceRoleKey = Read-Host "service_role / secret key (Dashboard → API)"
 $JwtSecret = Read-Host "JWT Secret (Dashboard → API → JWT Settings)"
@@ -22,7 +23,7 @@ npx supabase link --project-ref $ProjectRef
 Write-Host "`n[3/4] Setting Edge Function secrets..."
 npx supabase secrets set `
   SUPABASE_URL="https://${ProjectRef}.supabase.co" `
-  SUPABASE_ANON_KEY="sb_publishable_SY0DS7OaTs9LgW6CbLyBAw_kKVqGCmv" `
+  SUPABASE_ANON_KEY="$PublishableKey" `
   SUPABASE_SERVICE_ROLE_KEY="$ServiceRoleKey" `
   JWT_SECRET="$JwtSecret" `
   FRONTEND_URL="$FrontendUrl" `
