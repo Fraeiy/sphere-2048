@@ -1,9 +1,12 @@
 import { Link } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
+import { routeForMoveBalance } from '@/lib/routing';
 import { useAuthStore } from '@/stores/authStore';
 
 export function LandingPage() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated());
+  const moveBalance = useAuthStore((s) => s.moveBalance);
+  const playRoute = routeForMoveBalance(moveBalance?.credits_remaining ?? 0);
 
   return (
     <section className="flex flex-col items-center gap-6 text-center">
@@ -22,7 +25,7 @@ export function LandingPage() {
       <div className="flex flex-wrap justify-center gap-3">
         {isAuthenticated ? (
           <>
-            <Link to="/play"><Button>Play Now</Button></Link>
+            <Link to={playRoute}><Button>{playRoute === '/play' ? 'Play Now' : 'Get Moves'}</Button></Link>
             <Link to="/deposit"><Button variant="secondary">Deposit</Button></Link>
           </>
         ) : (

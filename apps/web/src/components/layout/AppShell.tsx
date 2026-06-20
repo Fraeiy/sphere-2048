@@ -1,5 +1,6 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { ReactNode } from 'react';
+import { useAuthReady } from '@/hooks/useAuthReady';
 import { useAuthStore } from '@/stores/authStore';
 import { useSphereWallet } from '@/hooks/useSphereWallet';
 
@@ -10,6 +11,7 @@ const NAV = [
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
+  useAuthReady();
   const { pathname } = useLocation();
   const navigate = useNavigate();
   const { player, moveBalance, isAuthenticated } = useAuthStore();

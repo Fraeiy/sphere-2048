@@ -1,22 +1,30 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Button } from '@/components/ui/Button';
+import { useAuthReady } from '@/hooks/useAuthReady';
 import { useSphereWallet } from '@/hooks/useSphereWallet';
+import { routeForMoveBalance } from '@/lib/routing';
 import { useAuthStore } from '@/stores/authStore';
 
 export function ConnectPage() {
   const navigate = useNavigate();
+  const authReady = useAuthReady();
   const { connect, connecting, connectError } = useSphereWallet();
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated());
+  const moveBalance = useAuthStore((s) => s.moveBalance);
 
   async function handleConnect() {
     const ok = await connect();
-    if (ok) navigate('/deposit');
+    if (ok) {
+      const credits = useAuthStore.getState().moveBalance?.credits_remaining ?? 0;
+      navigate(routeForMoveBalance(credits), { replace: true });
+    }
   }
 
   useEffect(() => {
-    if (isAuthenticated) navigate('/play', { replace: true });
-  }, [isAuthenticated, navigate]);
+    if (!authReady || !isAuthenticated) return;
+    navigate(routeForMoveBalance(moveBalance?.credits_remaining ?? 0), { replace: true });
+  }, [authReady, isAuthenticated, moveBalance, navigate]);
 
   return (
     <section className="flex flex-col items-center gap-5 text-center">

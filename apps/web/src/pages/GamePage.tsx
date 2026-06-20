@@ -4,14 +4,14 @@ import type { Board } from '@sphere-2048/game';
 import { GameBoard } from '@/components/game/GameBoard';
 import { ScoreBox } from '@/components/game/ScoreBox';
 import { Button } from '@/components/ui/Button';
-import { useAuthHydrated } from '@/hooks/useAuthHydrated';
+import { useAuthReady } from '@/hooks/useAuthReady';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useGameStore } from '@/stores/gameStore';
 
 export function GamePage() {
   const navigate = useNavigate();
-  const hydrated = useAuthHydrated();
+  const authReady = useAuthReady();
   const { accessToken, moveBalance, setMoveBalance, isAuthenticated } = useAuthStore();
   const { session, setSession } = useGameStore();
   const [busy, setBusy] = useState(false);
@@ -20,10 +20,10 @@ export function GamePage() {
   const startingRef = useRef(false);
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (!authReady) return;
     if (!isAuthenticated()) navigate('/connect');
     else if ((moveBalance?.credits_remaining ?? 0) <= 0) navigate('/deposit');
-  }, [hydrated, isAuthenticated, moveBalance, navigate]);
+  }, [authReady, isAuthenticated, moveBalance, navigate]);
 
   const startGame = useCallback(async () => {
     if (!accessToken || startingRef.current) return;
@@ -43,9 +43,9 @@ export function GamePage() {
   }, [accessToken, setSession, setMoveBalance]);
 
   useEffect(() => {
-    if (!hydrated || !accessToken || session) return;
+    if (!authReady || !accessToken || session) return;
     startGame();
-  }, [hydrated, accessToken, session, startGame]);
+  }, [authReady, accessToken, session, startGame]);
 
   const handleMove = useCallback(async (direction: 'left' | 'right' | 'up' | 'down') => {
     if (!accessToken || !session || busy) return;
@@ -78,7 +78,7 @@ export function GamePage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [handleMove]);
 
-  if (!hydrated || !session) {
+  if (!authReady || !session) {
     return (
       <p className="text-center text-sm text-ink-soft">
         {error || 'Starting game…'}

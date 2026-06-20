@@ -31,7 +31,7 @@ npx supabase secrets set `
 
 Write-Host "`n[4/4] Deploying Edge Functions..."
 $functions = @(
-  "register-player", "start-game", "execute-move", "end-game",
+  "register-player", "get-move-balance", "start-game", "execute-move", "end-game",
   "process-deposit", "get-leaderboard", "get-weekly-pool", "settle-weekly-round"
 )
 foreach ($fn in $functions) {

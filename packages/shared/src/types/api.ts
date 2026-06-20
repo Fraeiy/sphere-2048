@@ -36,6 +36,10 @@ export interface RegisterPlayerResponse {
   access_token: string;
 }
 
+export interface GetMoveBalanceResponse {
+  move_balance: MoveBalance;
+}
+
 export interface StartGameRequest {
   player_id: string;
 }

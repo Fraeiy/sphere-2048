@@ -2,6 +2,7 @@ import type {
   EndGameResponse,
   ExecuteMoveRequest,
   ExecuteMoveResponse,
+  GetMoveBalanceResponse,
   LeaderboardResponse,
   ProcessDepositRequest,
   ProcessDepositResponse,
@@ -38,6 +39,9 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+
+  getMoveBalance: (token: string) =>
+    edgeFetch<GetMoveBalanceResponse>('get-move-balance', { method: 'GET', token }),
 
   startGame: (() => {
     let inflight: Promise<StartGameResponse> | null = null;
