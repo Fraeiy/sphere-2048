@@ -7,14 +7,12 @@ import type { PublicIdentity } from '@unicitylabs/sphere-sdk/connect';
 import { autoConnect, detectTransport, type AutoConnectResult } from '@unicitylabs/sphere-sdk/connect/browser';
 import { uctToAtomic } from '@sphere-2048/shared';
 import { api } from '@/lib/api';
+import { resolveUctCoinId } from '@/lib/resolveUctCoin';
 import { walletSession } from '@/lib/walletSession';
 import { useAuthStore } from '@/stores/authStore';
 
 const WALLET_URL = import.meta.env.VITE_SPHERE_WALLET_URL ?? 'https://sphere.unicity.network';
 const SESSION_KEY = 'sphere2048-wallet-session';
-const UCT_COIN_ID = (import.meta.env.VITE_UCT_COIN_ID
-  ?? '455ad8720656b08e8dbd5bac1f3c73eeea5431565f6c1c3af742b1aa12d41d89').toLowerCase();
-
 const DAPP = {
   name: '2048 × Sphere',
   description: '2048 on Unicity testnet2',
@@ -149,11 +147,12 @@ export function useSphereWallet() {
 
   const sendDeposit = useCallback(async (amountUct: number, treasuryAddress: string, memo: string) => {
     const client = await ensureWalletClient();
+    const coinId = await resolveUctCoinId(client);
 
     const result = await client.intent<{ txHash?: string; hash?: string }>('send', {
       to: treasuryAddress,
       amount: uctToAtomic(amountUct).toString(),
-      coinId: UCT_COIN_ID,
+      coinId,
       memo,
     });
 

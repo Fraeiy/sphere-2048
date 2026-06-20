@@ -76,7 +76,8 @@ export function DepositPage() {
       {error && <p className="rounded-lg bg-red-100 px-3 py-2 text-sm text-red-800">{error}</p>}
 
       <p className="text-center text-xs text-ink-soft">
-        Opens Sphere to sign the transfer — keep the wallet popup open if prompted.
+        Opens Sphere to send <strong>UCT</strong> (testnet2). The wallet may show the amount in base units
+        (e.g. 10 UCT appears as 10000000000000000000) — that is normal.
       </p>
 
       <Button onClick={handleDeposit} disabled={loading || !TREASURY} className="w-full">

@@ -1,6 +1,9 @@
-/** UCT uses 18 decimal places (same as current production). */
+/** UCT uses 18 decimal places on testnet2. */
 export const UCT_DECIMALS = 18;
 export const UCT_ATOMIC_PER_TOKEN = 10n ** 18n;
+
+/** Canonical UCT coin id on Unicity testnet2 (from unicity-ids.testnet2.json). */
+export const UCT_TESTNET2_COIN_ID = 'f581d30f593e4b369d684a4563b5246f07b1d265f7178a2c0a82b81f39c24dc0';
 
 export function uctToAtomic(amount: number | string): bigint {
   const [whole, frac = ''] = String(amount).split('.');
