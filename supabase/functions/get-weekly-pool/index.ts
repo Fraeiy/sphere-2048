@@ -33,9 +33,11 @@ Deno.serve(async (req) => {
       .eq('weekly_round_id', round.id)
       .eq('status', 'pending');
 
+    const poolAtomic = String(round.prize_pool_atomic ?? '0');
+
     return jsonResponse({
-      round,
-      prize_pool_atomic: round.prize_pool_atomic,
+      round: { ...round, prize_pool_atomic: poolAtomic },
+      prize_pool_atomic: poolAtomic,
       deposit_count: depositCount ?? 0,
       top_entries: topEntries ?? [],
       pending_payouts: pendingPayouts ?? 0,

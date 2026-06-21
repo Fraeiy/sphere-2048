@@ -2,7 +2,8 @@ import { handleCors, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { getBearerToken, verifyPlayerToken } from '../_shared/auth.ts';
 
-const PRIZE_POOL_BPS = 5000n; // 50% of weekly deposits
+/** 50% of every deposit feeds the active weekly prize pool. */
+const PRIZE_POOL_BPS = 5000n;
 const UCT_ATOMIC_PER_TOKEN = 10n ** 18n;
 
 function parseAmountAtomic(raw: string | number): bigint {
