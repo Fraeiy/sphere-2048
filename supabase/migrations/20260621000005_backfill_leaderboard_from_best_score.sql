@@ -14,13 +14,14 @@ INSERT INTO leaderboard_entries (
 SELECT
   p.id,
   gs.id,
-  p.wallet_address,
+  w.address,
   p.did,
   p.best_score,
   gs.highest_tile,
   'global'::leaderboard_period,
   NULL
 FROM players p
+JOIN wallets w ON w.player_id = p.id AND w.is_primary = true
 JOIN LATERAL (
   SELECT id, highest_tile, score
   FROM game_sessions
@@ -56,13 +57,14 @@ INSERT INTO leaderboard_entries (
 SELECT
   p.id,
   gs.id,
-  p.wallet_address,
+  w.address,
   p.did,
   p.best_score,
   gs.highest_tile,
   'weekly'::leaderboard_period,
   wr.id
 FROM players p
+JOIN wallets w ON w.player_id = p.id AND w.is_primary = true
 JOIN weekly_rounds wr ON wr.status = 'active'
 JOIN LATERAL (
   SELECT id, highest_tile, score, weekly_round_id
