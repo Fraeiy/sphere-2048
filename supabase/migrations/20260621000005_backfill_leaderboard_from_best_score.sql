@@ -23,11 +23,11 @@ SELECT
 FROM players p
 JOIN wallets w ON w.player_id = p.id AND w.is_primary = true
 JOIN LATERAL (
-  SELECT id, highest_tile, score
-  FROM game_sessions
-  WHERE player_id = p.id
-    AND score > 0
-  ORDER BY score DESC, ended_at DESC NULLS LAST, created_at DESC
+  SELECT gs_inner.id, gs_inner.highest_tile, gs_inner.score
+  FROM game_sessions gs_inner
+  WHERE gs_inner.player_id = p.id
+    AND gs_inner.score > 0
+  ORDER BY gs_inner.score DESC, gs_inner.ended_at DESC NULLS LAST, gs_inner.started_at DESC
   LIMIT 1
 ) gs ON true
 WHERE p.best_score > 0
@@ -67,12 +67,12 @@ FROM players p
 JOIN wallets w ON w.player_id = p.id AND w.is_primary = true
 JOIN weekly_rounds wr ON wr.status = 'active'
 JOIN LATERAL (
-  SELECT id, highest_tile, score, weekly_round_id
-  FROM game_sessions
-  WHERE player_id = p.id
-    AND score > 0
-    AND weekly_round_id = wr.id
-  ORDER BY score DESC, ended_at DESC NULLS LAST, created_at DESC
+  SELECT gs_inner.id, gs_inner.highest_tile, gs_inner.score, gs_inner.weekly_round_id
+  FROM game_sessions gs_inner
+  WHERE gs_inner.player_id = p.id
+    AND gs_inner.score > 0
+    AND gs_inner.weekly_round_id = wr.id
+  ORDER BY gs_inner.score DESC, gs_inner.ended_at DESC NULLS LAST, gs_inner.started_at DESC
   LIMIT 1
 ) gs ON true
 WHERE p.best_score > 0
