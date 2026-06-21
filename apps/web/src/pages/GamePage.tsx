@@ -45,12 +45,17 @@ function predictNextState(session: GameSession, direction: MoveDirection) {
   };
 }
 
+function isGameOverSession(session: GameSession | null | undefined): boolean {
+  return session?.status === 'completed';
+}
+
 export function GamePage() {
   const navigate = useNavigate();
   const authReady = useAuthReady();
   const { accessToken, moveBalance, setMoveBalance, player, setPlayerBestScore, isAuthenticated } = useAuthStore();
   const { session, setSession } = useGameStore();
   const [busy, setBusy] = useState(false);
+  const [inputLocked, setInputLocked] = useState(false);
   const [error, setError] = useTimedError();
   const [best, setBest] = useState(player?.best_score ?? 0);
   const startingRef = useRef(false);
@@ -59,6 +64,7 @@ export function GamePage() {
   const accessTokenRef = useRef(accessToken);
   const moveQueueRef = useRef<MoveDirection[]>([]);
   const drainingRef = useRef(false);
+  const gameLockedRef = useRef(false);
 
   useEffect(() => {
     bestRef.current = best;
@@ -66,6 +72,10 @@ export function GamePage() {
 
   useEffect(() => {
     sessionRef.current = session;
+    if (isGameOverSession(session)) {
+      gameLockedRef.current = true;
+      setInputLocked(true);
+    }
   }, [session]);
 
   useEffect(() => {
@@ -92,6 +102,34 @@ export function GamePage() {
     }
   }, [setPlayerBestScore]);
 
+  const lockGame = useCallback((lockedSession?: GameSession) => {
+    gameLockedRef.current = true;
+    setInputLocked(true);
+    moveQueueRef.current = [];
+    if (lockedSession) {
+      const finalSession = lockedSession.status === 'completed'
+        ? lockedSession
+        : { ...lockedSession, status: 'completed' as const, ended_at: lockedSession.ended_at ?? new Date().toISOString() };
+      sessionRef.current = finalSession;
+      setSession(finalSession);
+    }
+  }, [setSession]);
+
+  const unlockGame = useCallback(() => {
+    gameLockedRef.current = false;
+    setInputLocked(false);
+    moveQueueRef.current = [];
+  }, []);
+
+  const commitSession = useCallback((next: GameSession) => {
+    sessionRef.current = next;
+    setSession(next);
+    if (isGameOverSession(next)) {
+      gameLockedRef.current = true;
+      setInputLocked(true);
+    }
+  }, [setSession]);
+
   const drainMoveQueue = useCallback(async () => {
     if (drainingRef.current) return;
     drainingRef.current = true;
@@ -99,10 +137,10 @@ export function GamePage() {
     let lastGoodSession = sessionRef.current;
 
     try {
-      while (moveQueueRef.current.length > 0) {
+      while (moveQueueRef.current.length > 0 && !gameLockedRef.current) {
         const token = accessTokenRef.current;
         const sess = sessionRef.current;
-        if (!token || !sess || sess.status === 'completed') {
+        if (!token || !sess || isGameOverSession(sess)) {
           moveQueueRef.current = [];
           break;
         }
@@ -118,9 +156,16 @@ export function GamePage() {
 
           moveQueueRef.current.shift();
 
+          if (result.game_over || isGameOverSession(result.session)) {
+            lastGoodSession = result.session;
+            lockGame(result.session);
+            break;
+          }
+
           if (!result.moved) {
             moveQueueRef.current = [];
             lastGoodSession = result.session;
+            if (result.game_over) lockGame(result.session);
             break;
           }
 
@@ -134,17 +179,16 @@ export function GamePage() {
         }
       }
 
-      if (lastGoodSession) {
-        sessionRef.current = lastGoodSession;
-        setSession(lastGoodSession);
+      if (!gameLockedRef.current && lastGoodSession && !isGameOverSession(lastGoodSession)) {
+        commitSession(lastGoodSession);
       }
     } finally {
       drainingRef.current = false;
-      if (moveQueueRef.current.length > 0) {
+      if (!gameLockedRef.current && moveQueueRef.current.length > 0) {
         void drainMoveQueue();
       }
     }
-  }, [setSession, setMoveBalance, applyBestScore, setError]);
+  }, [setMoveBalance, applyBestScore, setError, lockGame, commitSession]);
 
   const waitForMoveQueue = useCallback(async () => {
     while (drainingRef.current || moveQueueRef.current.length > 0) {
@@ -162,6 +206,7 @@ export function GamePage() {
         moveQueueRef.current = [];
         await waitForMoveQueue();
       }
+      unlockGame();
       const result = await api.startGame(accessToken, { forceNew });
       sessionRef.current = result.session;
       setSession(result.session);
@@ -173,7 +218,7 @@ export function GamePage() {
       setBusy(false);
       startingRef.current = false;
     }
-  }, [accessToken, setSession, setMoveBalance, applyBestScore, setError, waitForMoveQueue]);
+  }, [accessToken, setSession, setMoveBalance, applyBestScore, setError, waitForMoveQueue, unlockGame]);
 
   useEffect(() => {
     if (!authReady || !accessToken || session) return;
@@ -181,23 +226,31 @@ export function GamePage() {
   }, [authReady, accessToken, session, startGame]);
 
   const handleMove = useCallback((direction: MoveDirection) => {
+    if (gameLockedRef.current || inputLocked) return;
+
     const sess = sessionRef.current;
-    if (!accessTokenRef.current || !sess || sess.status === 'completed') return;
+    if (!accessTokenRef.current || !sess || isGameOverSession(sess)) return;
 
     const predicted = predictNextState(sess, direction);
     if (!predicted) return;
 
     const nextSession = { ...sess, ...predicted };
-    sessionRef.current = nextSession;
-    setSession(nextSession);
+    commitSession(nextSession);
     if (predicted.score > bestRef.current) applyBestScore(predicted.score);
 
     moveQueueRef.current.push(direction);
+
+    if (predicted.game_over) {
+      gameLockedRef.current = true;
+      setInputLocked(true);
+    }
+
     void drainMoveQueue();
-  }, [setSession, applyBestScore, drainMoveQueue]);
+  }, [inputLocked, commitSession, applyBestScore, drainMoveQueue]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (gameLockedRef.current) return;
       const map: Record<string, MoveDirection> = {
         ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
       };
@@ -214,6 +267,8 @@ export function GamePage() {
       </p>
     );
   }
+
+  const gameOver = inputLocked || isGameOverSession(session);
 
   return (
     <section className="flex flex-col items-center gap-4">
@@ -232,14 +287,14 @@ export function GamePage() {
         <p className="w-full rounded-lg bg-red-100 px-3 py-2 text-center text-sm text-red-800">{error}</p>
       )}
 
-      <GameBoard board={session.board_state as Board} onMove={handleMove} disabled={busy} />
+      <GameBoard board={session.board_state as Board} onMove={handleMove} disabled={busy || gameOver} />
 
       <p className="text-center text-xs font-semibold text-ink-soft/70">
         <span className="hidden md:inline">Use arrow keys or drag on the board</span>
         <span className="md:hidden">Swipe on the board to move</span>
       </p>
 
-      {session.status === 'completed' && (
+      {gameOver && (
         <div className="w-full rounded-lg border border-[#f3d5b0] bg-[#fff8ef] p-4 text-center">
           <h3 className="text-xl font-bold text-ink">Game Over</h3>
           <p className="text-sm text-ink-soft">Final score: {session.score}</p>
