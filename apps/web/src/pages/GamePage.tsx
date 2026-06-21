@@ -19,7 +19,9 @@ import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useGameStore } from '@/stores/gameStore';
 
-function predictNextState(session: GameSession, direction: 'left' | 'right' | 'up' | 'down') {
+type MoveDirection = 'left' | 'right' | 'up' | 'down';
+
+function predictNextState(session: GameSession, direction: MoveDirection) {
   const board = session.board_state as Board;
   const { board: nextBoard, score: gained, moved } = applyMove(board, direction);
   if (!moved) return null;
@@ -47,17 +49,28 @@ export function GamePage() {
   const navigate = useNavigate();
   const authReady = useAuthReady();
   const { accessToken, moveBalance, setMoveBalance, player, setPlayerBestScore, isAuthenticated } = useAuthStore();
-  const { session, setSession, updateSession } = useGameStore();
+  const { session, setSession } = useGameStore();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useTimedError();
   const [best, setBest] = useState(player?.best_score ?? 0);
   const startingRef = useRef(false);
-  const moveInFlightRef = useRef(false);
   const bestRef = useRef(best);
+  const sessionRef = useRef(session);
+  const accessTokenRef = useRef(accessToken);
+  const moveQueueRef = useRef<MoveDirection[]>([]);
+  const drainingRef = useRef(false);
 
   useEffect(() => {
     bestRef.current = best;
   }, [best]);
+
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  useEffect(() => {
+    accessTokenRef.current = accessToken;
+  }, [accessToken]);
 
   useEffect(() => {
     if (player?.best_score != null) {
@@ -79,13 +92,69 @@ export function GamePage() {
     }
   }, [setPlayerBestScore]);
 
+  const drainMoveQueue = useCallback(async () => {
+    if (drainingRef.current) return;
+    drainingRef.current = true;
+
+    let lastGoodSession = sessionRef.current;
+
+    try {
+      while (moveQueueRef.current.length > 0) {
+        const token = accessTokenRef.current;
+        const sess = sessionRef.current;
+        if (!token || !sess || sess.status === 'completed') {
+          moveQueueRef.current = [];
+          break;
+        }
+
+        const direction = moveQueueRef.current[0];
+
+        try {
+          const result = await api.executeMove(token, {
+            session_id: sess.id,
+            direction,
+            idempotency_key: crypto.randomUUID(),
+          });
+
+          moveQueueRef.current.shift();
+
+          if (!result.moved) {
+            moveQueueRef.current = [];
+            lastGoodSession = result.session;
+            break;
+          }
+
+          lastGoodSession = result.session;
+          setMoveBalance(result.move_balance);
+          applyBestScore(result.best_score);
+        } catch (err) {
+          moveQueueRef.current = [];
+          setError(err instanceof Error ? err.message : 'Move failed');
+          break;
+        }
+      }
+
+      if (lastGoodSession) {
+        sessionRef.current = lastGoodSession;
+        setSession(lastGoodSession);
+      }
+    } finally {
+      drainingRef.current = false;
+      if (moveQueueRef.current.length > 0) {
+        void drainMoveQueue();
+      }
+    }
+  }, [setSession, setMoveBalance, applyBestScore, setError]);
+
   const startGame = useCallback(async () => {
     if (!accessToken || startingRef.current) return;
     startingRef.current = true;
+    moveQueueRef.current = [];
     setBusy(true);
     setError('');
     try {
       const result = await api.startGame(accessToken);
+      sessionRef.current = result.session;
       setSession(result.session);
       setMoveBalance(result.move_balance);
       applyBestScore(result.best_score);
@@ -95,49 +164,32 @@ export function GamePage() {
       setBusy(false);
       startingRef.current = false;
     }
-  }, [accessToken, setSession, setMoveBalance, applyBestScore]);
+  }, [accessToken, setSession, setMoveBalance, applyBestScore, setError]);
 
   useEffect(() => {
     if (!authReady || !accessToken || session) return;
     startGame();
   }, [authReady, accessToken, session, startGame]);
 
-  const handleMove = useCallback(async (direction: 'left' | 'right' | 'up' | 'down') => {
-    if (!accessToken || !session || moveInFlightRef.current) return;
+  const handleMove = useCallback((direction: MoveDirection) => {
+    const sess = sessionRef.current;
+    if (!accessTokenRef.current || !sess || sess.status === 'completed') return;
 
-    const snapshot = session;
-    const predicted = predictNextState(snapshot, direction);
+    const predicted = predictNextState(sess, direction);
     if (!predicted) return;
 
-    moveInFlightRef.current = true;
-    updateSession(predicted);
+    const nextSession = { ...sess, ...predicted };
+    sessionRef.current = nextSession;
+    setSession(nextSession);
     if (predicted.score > bestRef.current) applyBestScore(predicted.score);
 
-    try {
-      const result = await api.executeMove(accessToken, {
-        session_id: snapshot.id,
-        direction,
-        idempotency_key: crypto.randomUUID(),
-      });
-
-      if (result.moved) {
-        setSession(result.session);
-        setMoveBalance(result.move_balance);
-        applyBestScore(result.best_score);
-      } else {
-        setSession(snapshot);
-      }
-    } catch (err) {
-      setSession(snapshot);
-      setError(err instanceof Error ? err.message : 'Move failed');
-    } finally {
-      moveInFlightRef.current = false;
-    }
-  }, [accessToken, session, setSession, setMoveBalance, updateSession, applyBestScore]);
+    moveQueueRef.current.push(direction);
+    void drainMoveQueue();
+  }, [setSession, applyBestScore, drainMoveQueue]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const map: Record<string, 'left' | 'right' | 'up' | 'down'> = {
+      const map: Record<string, MoveDirection> = {
         ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
       };
       if (map[e.key]) { e.preventDefault(); handleMove(map[e.key]); }
