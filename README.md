@@ -1,41 +1,92 @@
 # Sphere 2048
 
-Web3 2048 on Unicity Sphere SDK with React frontend, Supabase backend, and UCT move economy.
+**Classic 2048, on-chain.** Connect your Sphere wallet, spend move credits to play, and compete for weekly UCT prizes.
 
-## Quick Start
+**Play:** [sphere-2048.vercel.app](https://sphere-2048.vercel.app)
 
-```bash
-cd apps/web
-npm install
-npm run dev
-```
+---
 
-Open `http://localhost:5173`.
+## What is this?
 
-## Project Structure
+Sphere 2048 is the tile-merging puzzle you know — slide numbered tiles, combine matching values, chase 2048 and beyond — with a Web3 twist. Every move costs a **move credit**. Credits come from **UCT deposits** on the Unicity testnet. Your best games climb the **leaderboard**, and the **weekly prize pool** pays out to the top five scorers each week.
 
-```
-apps/web/              React + Vite frontend
-packages/game/         2048 game engine
-packages/shared/       Types, economy math, API contracts
-supabase/functions/    Edge Functions (auth, moves, deposits, leaderboard)
-supabase/migrations/   Postgres schema
-docs/ARCHITECTURE_V2.md
-```
+No email signup. Your **Sphere wallet** is your identity.
 
-## Deploy
+---
 
-- **Frontend:** Vercel builds `apps/web` (see `vercel.json`)
-- **Backend:** Supabase migrations + edge function deploy
+## How to play
 
-```bash
-supabase db push
-supabase functions deploy
-```
+### 1. Connect your wallet
 
-## Economy
+Open the app and tap **Connect Wallet**. Approve the connection in Sphere (testnet2). Your nametag or wallet address becomes your player name.
 
-- Deposits grant move credits (tiered)
-- 50% of weekly deposits fund the weekly prize pool
-- Top 5 weekly scorers win 35% / 25% / 20% / 15% / 5%
-- Personal best score persists on the player record across sessions
+### 2. Deposit UCT for moves
+
+You need **move credits** before you can play. Pick a deposit tier:
+
+| Deposit | Moves |
+|---------|-------|
+| 1 UCT   | 50    |
+| 5 UCT   | 300   |
+| 10 UCT  | 700   |
+
+Each move in a game uses **one credit**. When you run out, deposit again to keep playing.
+
+### 3. Play 2048
+
+- **Desktop:** arrow keys, or click and drag on the board
+- **Mobile:** swipe on the board
+
+Merge tiles (2+2→4, 4+4→8, …) to grow your score. The game ends when no moves are left.
+
+### 4. Track your progress
+
+- **SCORE** — this game only; resets when you start a new round
+- **BEST** — your all-time high; saved permanently until you beat it
+- **Leaderboard** — global (all-time bests per player) and weekly (this week's best game)
+
+---
+
+## Weekly prize pool
+
+Every week, a slice of all deposits goes into a shared prize pool.
+
+- **50%** of all UCT deposited that week feeds the pool
+- At week's end, the **top 5 players** (by best single-game score that week) split the pool:
+
+| Place | Share |
+|-------|-------|
+| 1st   | 35%   |
+| 2nd   | 25%   |
+| 3rd   | 20%   |
+| 4th   | 15%   |
+| 5th   | 5%    |
+
+Check the **Scores** tab → **Weekly** to see the current pool size and who's leading.
+
+---
+
+## Fair play
+
+Moves and scores are validated **on the server**. The board you see updates instantly, but every move is checked against the real game state — so scores on the leaderboard reflect legitimate play, not client-side tricks.
+
+---
+
+## Requirements
+
+- A **Sphere wallet** on **testnet2**
+- **UCT** for deposits (testnet tokens)
+- A modern browser (Chrome, Firefox, Safari, Edge)
+
+---
+
+## Quick tips
+
+- **Deposit the tier that fits your session** — 10 UCT / 700 moves is the best value per move
+- **Weekly vs global** — one great game this week can win you UCT even if your all-time best is lower
+- **BEST sticks with you** — a bad game won't wipe your personal record
+- **Moves don't carry between games** — unused credits stay in your balance until you use them
+
+---
+
+Built on [Unicity Sphere](https://sphere.unicity.network) · Powered by UCT on testnet2
