@@ -14,6 +14,41 @@ import {
 
 const VALID_DIRECTIONS = new Set(['left', 'right', 'up', 'down']);
 
+/** Inline credit deduction — avoids broken deduct_move_credit RPC (PG 42702 ambiguous column). */
+async function deductMoveCredit(
+  supabase: ReturnType<typeof createServiceClient>,
+  playerId: string,
+): Promise<{ success: boolean; credits_remaining: number; new_version: number }> {
+  const { data: row, error: fetchErr } = await supabase
+    .from('move_balances')
+    .select('credits_remaining, version')
+    .eq('player_id', playerId)
+    .single();
+
+  if (fetchErr || !row || row.credits_remaining <= 0) {
+    return { success: false, credits_remaining: row?.credits_remaining ?? 0, new_version: row?.version ?? 0 };
+  }
+
+  const { data: updated, error: updateErr } = await supabase
+    .from('move_balances')
+    .update({
+      credits_remaining: row.credits_remaining - 1,
+      version: row.version + 1,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('player_id', playerId)
+    .eq('version', row.version)
+    .gt('credits_remaining', 0)
+    .select('credits_remaining, version')
+    .maybeSingle();
+
+  if (updateErr || !updated) {
+    return { success: false, credits_remaining: row.credits_remaining, new_version: row.version };
+  }
+
+  return { success: true, credits_remaining: updated.credits_remaining, new_version: updated.version };
+}
+
 Deno.serve(async (req) => {
   const cors = handleCors(req);
   if (cors) return cors;
@@ -54,12 +89,8 @@ Deno.serve(async (req) => {
       return jsonResponse({ session, moved: false, move_balance: balance, game_over: !canMove(board), won: hasWon(board) });
     }
 
-    const { data: deduct, error: deductErr } = await supabase.rpc('deduct_move_credit', {
-      p_player_id: claims.player_id,
-    });
-    if (deductErr) throw deductErr;
-    const deduction = Array.isArray(deduct) ? deduct[0] : deduct;
-    if (!deduction?.success) {
+    const deduction = await deductMoveCredit(supabase, claims.player_id);
+    if (!deduction.success) {
       return errorResponse('INSUFFICIENT_CREDITS', 'No move credits remaining', 402);
     }
 
@@ -89,7 +120,7 @@ Deno.serve(async (req) => {
       .single();
     if (updateErr || !updated) throw updateErr ?? new Error('Failed to update session');
 
-    await supabase.from('session_moves').insert({
+    const { error: moveLogErr } = await supabase.from('session_moves').insert({
       session_id: body.session_id,
       move_number: newMoveCount,
       direction: body.direction,
@@ -97,6 +128,7 @@ Deno.serve(async (req) => {
       highest_tile_after: highestTile,
       board_after: nextBoard,
     });
+    if (moveLogErr) throw moveLogErr;
 
     const { data: balance } = await supabase.from('move_balances').select('*').eq('player_id', claims.player_id).single();
 

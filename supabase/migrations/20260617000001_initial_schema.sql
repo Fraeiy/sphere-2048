@@ -278,6 +278,8 @@ RETURNS TABLE (
 ) AS $$
 DECLARE
   v_row move_balances%ROWTYPE;
+  v_remaining INTEGER;
+  v_version INTEGER;
 BEGIN
   SELECT * INTO v_row FROM move_balances WHERE player_id = p_player_id FOR UPDATE;
 
@@ -287,14 +289,14 @@ BEGIN
   END IF;
 
   UPDATE move_balances
-  SET credits_remaining = credits_remaining - 1,
-      version = version + 1,
+  SET credits_remaining = move_balances.credits_remaining - 1,
+      version = move_balances.version + 1,
       updated_at = now()
   WHERE player_id = p_player_id
   RETURNING move_balances.credits_remaining, move_balances.version
-  INTO credits_remaining, new_version;
+  INTO v_remaining, v_version;
 
-  RETURN QUERY SELECT true, credits_remaining, new_version;
+  RETURN QUERY SELECT true, v_remaining, v_version;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
