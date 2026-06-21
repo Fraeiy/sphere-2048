@@ -21,13 +21,11 @@ Deno.serve(async (req) => {
       .eq('weekly_round_id', round.id)
       .eq('status', 'confirmed');
 
-    const { data: topEntries } = await supabase
-      .from('leaderboard_entries')
-      .select('*')
-      .eq('period_type', 'weekly')
-      .eq('weekly_round_id', round.id)
-      .order('score', { ascending: false })
-      .limit(10);
+    const { data: topEntries } = await supabase.rpc('get_leaderboard', {
+      p_period: 'weekly',
+      p_weekly_round_id: round.id,
+      p_limit: 10,
+    });
 
     const { count: pendingPayouts } = await supabase
       .from('payout_records')

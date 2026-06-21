@@ -29,19 +29,11 @@ Deno.serve(async (req) => {
       }
     }
 
-    let query = supabase
-      .from('leaderboard_entries')
-      .select('*')
-      .eq('period_type', period)
-      .order('score', { ascending: false })
-      .order('recorded_at', { ascending: false })
-      .limit(limit);
-
-    if (period === 'weekly' && round?.id) {
-      query = query.eq('weekly_round_id', round.id);
-    }
-
-    const { data: entries, error } = await query;
+    const { data: entries, error } = await supabase.rpc('get_leaderboard', {
+      p_period: period,
+      p_weekly_round_id: period === 'weekly' ? round?.id ?? null : null,
+      p_limit: limit,
+    });
     if (error) throw error;
 
     return jsonResponse({ entries: entries ?? [], weekly_round: round });

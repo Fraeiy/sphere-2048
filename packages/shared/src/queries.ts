@@ -30,17 +30,11 @@ export const QUERIES = {
   `,
 
   globalLeaderboard: `
-    SELECT * FROM leaderboard_entries
-    WHERE period_type = 'global'
-    ORDER BY score DESC, recorded_at DESC
-    LIMIT $1
+    SELECT * FROM get_leaderboard('global'::leaderboard_period, NULL, $1)
   `,
 
   weeklyLeaderboard: `
-    SELECT * FROM leaderboard_entries
-    WHERE period_type = 'weekly' AND weekly_round_id = $1
-    ORDER BY score DESC, recorded_at DESC
-    LIMIT $2
+    SELECT * FROM get_leaderboard('weekly'::leaderboard_period, $1, $2)
   `,
 
   depositByTxHash: `
