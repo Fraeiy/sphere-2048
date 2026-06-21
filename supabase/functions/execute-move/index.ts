@@ -140,12 +140,19 @@ Deno.serve(async (req) => {
     });
     if (moveLogErr) throw moveLogErr;
 
-    const [{ data: balance }, { data: bestScore }] = await Promise.all([
+    const [{ data: balance }, { data: playerBefore }] = await Promise.all([
       supabase.from('move_balances').select('*').eq('player_id', claims.player_id).single(),
-      supabase.rpc('update_best_score_if_higher', { p_player_id: claims.player_id, p_score: newScore }),
+      supabase.from('players').select('best_score').eq('id', claims.player_id).single(),
     ]);
 
-    if (gameOver) {
+    const previousBest = playerBefore?.best_score ?? 0;
+    const { data: bestScore } = await supabase.rpc('update_best_score_if_higher', {
+      p_player_id: claims.player_id,
+      p_score: newScore,
+    });
+
+    const improvedBest = newScore > previousBest;
+    if (gameOver || improvedBest) {
       await recordLeaderboardEntries(supabase, updated, claims);
     }
 

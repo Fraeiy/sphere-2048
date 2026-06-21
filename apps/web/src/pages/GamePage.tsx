@@ -124,10 +124,6 @@ export function GamePage() {
   const commitSession = useCallback((next: GameSession) => {
     sessionRef.current = next;
     setSession(next);
-    if (isGameOverSession(next)) {
-      gameLockedRef.current = true;
-      setInputLocked(true);
-    }
   }, [setSession]);
 
   const drainMoveQueue = useCallback(async () => {
@@ -137,10 +133,10 @@ export function GamePage() {
     let lastGoodSession = sessionRef.current;
 
     try {
-      while (moveQueueRef.current.length > 0 && !gameLockedRef.current) {
+      while (moveQueueRef.current.length > 0) {
         const token = accessTokenRef.current;
         const sess = sessionRef.current;
-        if (!token || !sess || isGameOverSession(sess)) {
+        if (!token || !sess) {
           moveQueueRef.current = [];
           break;
         }
@@ -179,12 +175,12 @@ export function GamePage() {
         }
       }
 
-      if (!gameLockedRef.current && lastGoodSession && !isGameOverSession(lastGoodSession)) {
+      if (lastGoodSession && !isGameOverSession(lastGoodSession)) {
         commitSession(lastGoodSession);
       }
     } finally {
       drainingRef.current = false;
-      if (!gameLockedRef.current && moveQueueRef.current.length > 0) {
+      if (moveQueueRef.current.length > 0) {
         void drainMoveQueue();
       }
     }
@@ -241,7 +237,6 @@ export function GamePage() {
     moveQueueRef.current.push(direction);
 
     if (predicted.game_over) {
-      gameLockedRef.current = true;
       setInputLocked(true);
     }
 
