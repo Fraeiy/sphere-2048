@@ -146,14 +146,23 @@ export function GamePage() {
     }
   }, [setSession, setMoveBalance, applyBestScore, setError]);
 
-  const startGame = useCallback(async () => {
+  const waitForMoveQueue = useCallback(async () => {
+    while (drainingRef.current || moveQueueRef.current.length > 0) {
+      await new Promise((r) => setTimeout(r, 32));
+    }
+  }, []);
+
+  const startGame = useCallback(async (forceNew = false) => {
     if (!accessToken || startingRef.current) return;
     startingRef.current = true;
-    moveQueueRef.current = [];
     setBusy(true);
     setError('');
     try {
-      const result = await api.startGame(accessToken);
+      if (forceNew) {
+        moveQueueRef.current = [];
+        await waitForMoveQueue();
+      }
+      const result = await api.startGame(accessToken, { forceNew });
       sessionRef.current = result.session;
       setSession(result.session);
       setMoveBalance(result.move_balance);
@@ -164,7 +173,7 @@ export function GamePage() {
       setBusy(false);
       startingRef.current = false;
     }
-  }, [accessToken, setSession, setMoveBalance, applyBestScore, setError]);
+  }, [accessToken, setSession, setMoveBalance, applyBestScore, setError, waitForMoveQueue]);
 
   useEffect(() => {
     if (!authReady || !accessToken || session) return;
@@ -234,7 +243,7 @@ export function GamePage() {
         <div className="w-full rounded-lg border border-[#f3d5b0] bg-[#fff8ef] p-4 text-center">
           <h3 className="text-xl font-bold text-ink">Game Over</h3>
           <p className="text-sm text-ink-soft">Final score: {session.score}</p>
-          <Button className="mt-3" onClick={startGame} disabled={busy}>Play Again</Button>
+          <Button className="mt-3" onClick={() => void startGame(true)} disabled={busy}>New Game</Button>
         </div>
       )}
     </section>

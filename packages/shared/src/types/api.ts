@@ -42,7 +42,7 @@ export interface GetMoveBalanceResponse {
 }
 
 export interface StartGameRequest {
-  player_id: string;
+  force_new?: boolean;
 }
 
 export interface StartGameResponse {

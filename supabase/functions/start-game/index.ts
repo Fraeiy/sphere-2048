@@ -1,7 +1,7 @@
 import { handleCors, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 import { getBearerToken, verifyPlayerToken } from '../_shared/auth.ts';
-import { createInitialBoard, createSeededRng } from '../_shared/game-engine.ts';
+import { canMove, createInitialBoard, createSeededRng, type Board } from '../_shared/game-engine.ts';
 
 Deno.serve(async (req) => {
   const cors = handleCors(req);
@@ -12,6 +12,9 @@ Deno.serve(async (req) => {
     const token = getBearerToken(req);
     if (!token) return errorResponse('UNAUTHORIZED', 'Bearer token required', 401);
     const claims = await verifyPlayerToken(token);
+
+    const body = await req.json().catch(() => ({})) as { force_new?: boolean };
+    const forceNew = Boolean(body.force_new);
 
     const supabase = createServiceClient();
 
@@ -41,12 +44,23 @@ Deno.serve(async (req) => {
     const bestScore = player?.best_score ?? 0;
 
     if (activeSession) {
-      const { data: fullBalance } = await supabase
-        .from('move_balances')
-        .select('*')
-        .eq('player_id', claims.player_id)
-        .single();
-      return jsonResponse({ session: activeSession, move_balance: fullBalance, best_score: bestScore });
+      const board = activeSession.board_state as Board;
+      const isStuck = !canMove(board);
+
+      if (!forceNew && !isStuck) {
+        const { data: fullBalance } = await supabase
+          .from('move_balances')
+          .select('*')
+          .eq('player_id', claims.player_id)
+          .single();
+        return jsonResponse({ session: activeSession, move_balance: fullBalance, best_score: bestScore });
+      }
+
+      await supabase.from('game_sessions').update({
+        status: 'completed',
+        ended_at: new Date().toISOString(),
+        ending_credits: balance.credits_remaining,
+      }).eq('id', activeSession.id);
     }
 
     const { data: roundId } = await supabase.rpc('get_active_weekly_round');

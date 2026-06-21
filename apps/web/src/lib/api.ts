@@ -46,13 +46,20 @@ export const api = {
   startGame: (() => {
     let inflight: Promise<StartGameResponse> | null = null;
     let inflightToken: string | null = null;
-    return (token: string) => {
-      if (inflight && inflightToken === token) return inflight;
-      inflightToken = token;
-      inflight = edgeFetch<StartGameResponse>('start-game', { method: 'POST', body: '{}', token }).finally(
-        () => { inflight = null; inflightToken = null; },
-      );
-      return inflight;
+    return (token: string, options?: { forceNew?: boolean }) => {
+      const forceNew = options?.forceNew ?? false;
+      if (!forceNew && inflight && inflightToken === token) return inflight;
+      const request = edgeFetch<StartGameResponse>('start-game', {
+        method: 'POST',
+        body: JSON.stringify({ force_new: forceNew }),
+        token,
+      });
+      if (!forceNew) {
+        inflightToken = token;
+        inflight = request.finally(() => { inflight = null; inflightToken = null; });
+        return inflight;
+      }
+      return request;
     };
   })(),
 
