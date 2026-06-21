@@ -14,6 +14,7 @@ import { GameBoard } from '@/components/game/GameBoard';
 import { ScoreBox } from '@/components/game/ScoreBox';
 import { Button } from '@/components/ui/Button';
 import { useAuthReady } from '@/hooks/useAuthReady';
+import { useTimedError } from '@/hooks/useTimedError';
 import { api } from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useGameStore } from '@/stores/gameStore';
@@ -48,7 +49,7 @@ export function GamePage() {
   const { accessToken, moveBalance, setMoveBalance, player, setPlayerBestScore, isAuthenticated } = useAuthStore();
   const { session, setSession, updateSession } = useGameStore();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useTimedError();
   const [best, setBest] = useState(player?.best_score ?? 0);
   const startingRef = useRef(false);
   const moveInFlightRef = useRef(false);

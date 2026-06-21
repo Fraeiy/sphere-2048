@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTimedError } from '@/hooks/useTimedError';
 import { useNavigate } from 'react-router-dom';
 import { uctToAtomic } from '@sphere-2048/shared';
 import { Button } from '@/components/ui/Button';
@@ -21,7 +22,7 @@ export function DepositPage() {
   const { sendDeposit } = useSphereWallet();
   const [selected, setSelected] = useState(10);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useTimedError();
   const [pendingTx, setPendingTx] = useState<{ txHash: string; amount: number; memo: string } | null>(null);
 
   useEffect(() => {
@@ -124,11 +125,6 @@ export function DepositPage() {
           {loading ? 'Crediting…' : `Retry credit (${pendingTx.amount} UCT)`}
         </Button>
       )}
-
-      <p className="text-center text-xs text-ink-soft">
-        Sends <strong>UCT</strong> to <strong>{TREASURY}</strong> on testnet2. The wallet may show the amount in
-        base units (e.g. 10 UCT = 10000000000000000000) — that is normal.
-      </p>
 
       <Button onClick={handleDeposit} disabled={loading || !TREASURY} className="w-full">
         {loading ? 'Opening wallet…' : `Deposit ${selected} UCT`}

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useTimedError } from '@/hooks/useTimedError';
 import { atomicToUct } from '@sphere-2048/shared';
 import { LeaderboardTable } from '@/components/leaderboard/LeaderboardTable';
 import { api } from '@/lib/api';
@@ -9,7 +10,7 @@ export function LeaderboardPage() {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([]);
   const [pool, setPool] = useState<WeeklyPoolResponse | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
+  const [error, setError] = useTimedError();
 
   useEffect(() => {
     setLoading(true);
