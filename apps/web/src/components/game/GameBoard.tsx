@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import type { Board } from '@sphere-2048/game';
 import { useSwipe } from '@/hooks/useSwipe';
 
@@ -21,7 +22,7 @@ interface GameBoardProps {
   disabled?: boolean;
 }
 
-export function GameBoard({ board, onMove, disabled }: GameBoardProps) {
+export const GameBoard = memo(function GameBoard({ board, onMove, disabled }: GameBoardProps) {
   const bind = useSwipe(onMove, disabled);
 
   return (
@@ -36,7 +37,7 @@ export function GameBoard({ board, onMove, disabled }: GameBoardProps) {
             <div
               key={`${r}-${c}`}
               data-v={value || undefined}
-              className={`flex items-center justify-center rounded-md text-3xl font-black transition ${
+              className={`flex items-center justify-center rounded-md text-3xl font-black ${
                 value ? TILE_STYLES[value] ?? 'bg-orange-700 text-white' : 'bg-tile-empty'
               }`}
             >
@@ -47,4 +48,4 @@ export function GameBoard({ board, onMove, disabled }: GameBoardProps) {
       </div>
     </div>
   );
-}
+});

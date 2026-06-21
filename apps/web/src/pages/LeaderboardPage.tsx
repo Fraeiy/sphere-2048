@@ -52,6 +52,7 @@ export function LeaderboardPage() {
         <div className="rounded-lg border border-[#f2d2ae] bg-[#fff0de] p-3 text-center">
           <p className="text-xs text-ink-soft">Weekly prize pool · round #{pool.round.round_number}</p>
           <p className="text-2xl font-black text-orange-600">{poolUct.toFixed(2)} UCT</p>
+          <p className="mt-1 text-[11px] text-ink-soft">50% of weekly deposits · top 5 win 35% / 25% / 20% / 15% / 5%</p>
         </div>
       )}
 

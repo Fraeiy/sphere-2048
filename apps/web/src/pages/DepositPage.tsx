@@ -88,7 +88,7 @@ export function DepositPage() {
   return (
     <section className="flex flex-col gap-4">
       <h2 className="text-center text-2xl font-extrabold text-ink">Deposit UCT</h2>
-      <p className="text-center text-sm text-ink-soft">Deposits grant move credits and contribute 10% to the weekly prize pool.</p>
+      <p className="text-center text-sm text-ink-soft">Deposits grant move credits and 50% goes to the weekly prize pool.</p>
 
       <div className="grid gap-2">
         {TIERS.map((tier) => (

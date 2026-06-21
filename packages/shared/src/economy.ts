@@ -51,9 +51,12 @@ export function resolveMovesFromDeposit(
   };
 }
 
-/** Prize pool contribution: 10% of deposit to weekly pool (configurable constant). */
-export const PRIZE_POOL_CONTRIBUTION_BPS = 1000; // 10.00%
+/** Prize pool contribution: 50% of weekly deposits go to the weekly prize pool. */
+export const PRIZE_POOL_CONTRIBUTION_BPS = 5000; // 50.00%
 
 export function prizePoolContribution(amountAtomic: bigint): bigint {
   return (amountAtomic * BigInt(PRIZE_POOL_CONTRIBUTION_BPS)) / 10000n;
 }
+
+/** Top 5 weekly winners: 35% / 25% / 20% / 15% / 5% of the prize pool. */
+export const WEEKLY_PAYOUT_SHARES_BPS = [3500, 2500, 2000, 1500, 500] as const;

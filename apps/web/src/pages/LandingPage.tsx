@@ -19,7 +19,7 @@ export function LandingPage() {
 
       <p className="max-w-md text-sm leading-relaxed text-ink-soft">
         Connect your Sphere wallet, deposit UCT for move credits, and compete on global and weekly leaderboards.
-        Every deposit feeds the weekly prize pool.
+        50% of every weekly deposit feeds the prize pool for the top 5 players.
       </p>
 
       <div className="flex flex-wrap justify-center gap-3">

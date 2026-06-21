@@ -85,8 +85,18 @@ Deno.serve(async (req) => {
     const { board: nextBoard, score: gained, moved } = applyMove(board, body.direction);
 
     if (!moved) {
-      const { data: balance } = await supabase.from('move_balances').select('*').eq('player_id', claims.player_id).single();
-      return jsonResponse({ session, moved: false, move_balance: balance, game_over: !canMove(board), won: hasWon(board) });
+      const [{ data: balance }, { data: player }] = await Promise.all([
+        supabase.from('move_balances').select('*').eq('player_id', claims.player_id).single(),
+        supabase.from('players').select('best_score').eq('id', claims.player_id).single(),
+      ]);
+      return jsonResponse({
+        session,
+        moved: false,
+        move_balance: balance,
+        game_over: !canMove(board),
+        won: hasWon(board),
+        best_score: player?.best_score ?? 0,
+      });
     }
 
     const deduction = await deductMoveCredit(supabase, claims.player_id);
@@ -130,7 +140,10 @@ Deno.serve(async (req) => {
     });
     if (moveLogErr) throw moveLogErr;
 
-    const { data: balance } = await supabase.from('move_balances').select('*').eq('player_id', claims.player_id).single();
+    const [{ data: balance }, { data: bestScore }] = await Promise.all([
+      supabase.from('move_balances').select('*').eq('player_id', claims.player_id).single(),
+      supabase.rpc('update_best_score_if_higher', { p_player_id: claims.player_id, p_score: newScore }),
+    ]);
 
     if (gameOver) {
       await recordLeaderboardEntries(supabase, updated, claims);
@@ -142,6 +155,7 @@ Deno.serve(async (req) => {
       move_balance: balance,
       game_over: gameOver,
       won,
+      best_score: bestScore ?? 0,
     });
   } catch (err) {
     console.error('[execute-move]', err);

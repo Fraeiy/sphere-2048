@@ -38,6 +38,7 @@ export interface RegisterPlayerResponse {
 
 export interface GetMoveBalanceResponse {
   move_balance: MoveBalance;
+  best_score: number;
 }
 
 export interface StartGameRequest {
@@ -47,6 +48,7 @@ export interface StartGameRequest {
 export interface StartGameResponse {
   session: GameSession;
   move_balance: MoveBalance;
+  best_score: number;
 }
 
 export interface ExecuteMoveRequest {
@@ -61,6 +63,7 @@ export interface ExecuteMoveResponse {
   move_balance: MoveBalance;
   game_over: boolean;
   won: boolean;
+  best_score: number;
 }
 
 export interface EndGameRequest {

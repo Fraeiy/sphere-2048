@@ -14,6 +14,7 @@ interface AuthState {
     moveBalance: MoveBalance;
   }) => void;
   setMoveBalance: (balance: MoveBalance) => void;
+  setPlayerBestScore: (score: number) => void;
   clearSession: () => void;
   isAuthenticated: () => boolean;
 }
@@ -28,6 +29,12 @@ export const useAuthStore = create<AuthState>()(
       setSession: ({ accessToken, player, wallet, moveBalance }) =>
         set({ accessToken, player, wallet, moveBalance }),
       setMoveBalance: (moveBalance) => set({ moveBalance }),
+      setPlayerBestScore: (score) =>
+        set((state) => ({
+          player: state.player && score > state.player.best_score
+            ? { ...state.player, best_score: score }
+            : state.player,
+        })),
       clearSession: () => set({ accessToken: null, player: null, wallet: null, moveBalance: null }),
       isAuthenticated: () => Boolean(get().accessToken && get().player),
     }),

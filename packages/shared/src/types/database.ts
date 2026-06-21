@@ -10,6 +10,7 @@ export interface Player {
   id: string;
   did: string;
   display_name: string | null;
+  best_score: number;
   created_at: string;
   updated_at: string;
 }

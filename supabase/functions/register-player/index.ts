@@ -24,7 +24,7 @@ Deno.serve(async (req) => {
 
     const { data: existingPlayer } = await supabase
       .from('players')
-      .select('id, did, display_name, created_at, updated_at')
+      .select('id, did, display_name, best_score, created_at, updated_at')
       .eq('did', body.did)
       .maybeSingle();
 
@@ -39,7 +39,7 @@ Deno.serve(async (req) => {
       const { data: newPlayer, error: playerErr } = await supabase
         .from('players')
         .insert({ did: body.did, display_name: body.nametag ?? body.did })
-        .select('id, did, display_name, created_at, updated_at')
+        .select('id, did, display_name, best_score, created_at, updated_at')
         .single();
       if (playerErr || !newPlayer) throw playerErr ?? new Error('Failed to create player');
       playerId = newPlayer.id;
@@ -75,7 +75,7 @@ Deno.serve(async (req) => {
 
     const { data: player } = await supabase
       .from('players')
-      .select('id, did, display_name, created_at, updated_at')
+      .select('id, did, display_name, best_score, created_at, updated_at')
       .eq('id', playerId)
       .single();
 

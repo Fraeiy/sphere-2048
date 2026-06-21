@@ -33,13 +33,20 @@ Deno.serve(async (req) => {
       .eq('status', 'active')
       .maybeSingle();
 
+    const { data: player } = await supabase
+      .from('players')
+      .select('best_score')
+      .eq('id', claims.player_id)
+      .single();
+    const bestScore = player?.best_score ?? 0;
+
     if (activeSession) {
       const { data: fullBalance } = await supabase
         .from('move_balances')
         .select('*')
         .eq('player_id', claims.player_id)
         .single();
-      return jsonResponse({ session: activeSession, move_balance: fullBalance });
+      return jsonResponse({ session: activeSession, move_balance: fullBalance, best_score: bestScore });
     }
 
     const { data: roundId } = await supabase.rpc('get_active_weekly_round');
@@ -68,7 +75,7 @@ Deno.serve(async (req) => {
       .eq('player_id', claims.player_id)
       .single();
 
-    return jsonResponse({ session, move_balance: fullBalance });
+    return jsonResponse({ session, move_balance: fullBalance, best_score: bestScore });
   } catch (err) {
     console.error('[start-game]', err);
     return errorResponse('START_GAME_FAILED', err instanceof Error ? err.message : 'Failed to start game', 500);

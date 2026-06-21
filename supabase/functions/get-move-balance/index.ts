@@ -20,7 +20,17 @@ Deno.serve(async (req) => {
       .single();
 
     if (error || !balance) return errorResponse('NO_BALANCE', 'Move balance not found', 404);
-    return jsonResponse({ move_balance: balance });
+
+    const { data: player } = await supabase
+      .from('players')
+      .select('best_score')
+      .eq('id', claims.player_id)
+      .single();
+
+    return jsonResponse({
+      move_balance: balance,
+      best_score: player?.best_score ?? 0,
+    });
   } catch (err) {
     console.error('[get-move-balance]', err);
     return errorResponse('BALANCE_FETCH_FAILED', err instanceof Error ? err.message : 'Failed to fetch balance', 500);

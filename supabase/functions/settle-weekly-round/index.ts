@@ -1,8 +1,28 @@
 import { handleCors, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 
-/** Payout distribution: 50% / 30% / 20% for top 3 weekly scorers. */
-const PAYOUT_SHARES = [0.5, 0.3, 0.2];
+/** Top 5 weekly winners: 35% / 25% / 20% / 15% / 5% of the prize pool. */
+const PAYOUT_SHARES_BPS = [3500, 2500, 2000, 1500, 500];
+
+interface WeeklyEntry {
+  player_id: string;
+  wallet_address: string;
+  score: number;
+  highest_tile: number;
+}
+
+function topUniquePlayers(entries: WeeklyEntry[], limit: number): WeeklyEntry[] {
+  const bestByPlayer = new Map<string, WeeklyEntry>();
+  for (const entry of entries) {
+    const existing = bestByPlayer.get(entry.player_id);
+    if (!existing || entry.score > existing.score) {
+      bestByPlayer.set(entry.player_id, entry);
+    }
+  }
+  return [...bestByPlayer.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
+}
 
 Deno.serve(async (req) => {
   const cors = handleCors(req);
@@ -29,27 +49,28 @@ Deno.serve(async (req) => {
 
     await supabase.from('weekly_rounds').update({ status: 'settling' }).eq('id', round.id);
 
-    const { data: winners } = await supabase
+    const { data: entries } = await supabase
       .from('leaderboard_entries')
       .select('player_id, wallet_address, score, highest_tile')
       .eq('period_type', 'weekly')
       .eq('weekly_round_id', round.id)
       .order('score', { ascending: false })
-      .limit(3);
+      .limit(100);
 
+    const winners = topUniquePlayers((entries ?? []) as WeeklyEntry[], PAYOUT_SHARES_BPS.length);
     const pool = BigInt(round.prize_pool_atomic ?? 0);
     const payouts = [];
 
-    for (let i = 0; i < (winners?.length ?? 0); i++) {
-      const share = PAYOUT_SHARES[i] ?? 0;
-      const amount = Number((pool * BigInt(Math.round(share * 10000))) / 10000n);
+    for (let i = 0; i < winners.length; i++) {
+      const shareBps = PAYOUT_SHARES_BPS[i] ?? 0;
+      const amount = Number((pool * BigInt(shareBps)) / 10000n);
       if (amount <= 0) continue;
       payouts.push({
         weekly_round_id: round.id,
-        player_id: winners![i].player_id,
+        player_id: winners[i].player_id,
         rank: i + 1,
         amount_atomic: amount,
-        wallet_address: winners![i].wallet_address,
+        wallet_address: winners[i].wallet_address,
         status: 'pending',
       });
     }
@@ -78,7 +99,7 @@ Deno.serve(async (req) => {
       settled: true,
       round_id: round.id,
       payouts_created: payouts.length,
-      winners: winners ?? [],
+      winners,
     });
   } catch (err) {
     console.error('[settle-weekly-round]', err);
