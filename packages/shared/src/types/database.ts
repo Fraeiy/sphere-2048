@@ -124,10 +124,17 @@ export interface PayoutRecord {
   weekly_round_id: string;
   player_id: string;
   rank: number;
-  amount_atomic: number;
+  amount_atomic: number | string;
   wallet_address: string;
   status: PayoutStatus;
   tx_hash: string | null;
   created_at: string;
   sent_at: string | null;
+  /** Resolved Sphere recipient used for pay/DM (@nametag or address). */
+  recipient: string | null;
+  failure_reason: string | null;
+  attempt_count: number;
+  last_attempt_at: string | null;
+  dm_sent_at: string | null;
+  dm_error: string | null;
 }

@@ -64,6 +64,8 @@ Every week, a slice of all deposits goes into a shared prize pool.
 
 Check the **Scores** tab → **Weekly** to see the current pool size and who's leading.
 
+At week end a **treasury worker** settles the round, pays the top 5 from the pool automatically, and sends each winner a **Sphere DM** with congrats and payment confirmation. It runs for free on **GitHub Actions** (hourly) — no Railway/Fly. See [`apps/treasury-worker/README.md`](apps/treasury-worker/README.md).
+
 ---
 
 ## Fair play

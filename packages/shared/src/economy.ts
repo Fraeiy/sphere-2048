@@ -60,3 +60,54 @@ export function prizePoolContribution(amountAtomic: bigint): bigint {
 
 /** Top 5 weekly winners: 35% / 25% / 20% / 15% / 5% of the prize pool. */
 export const WEEKLY_PAYOUT_SHARES_BPS = [3500, 2500, 2000, 1500, 500] as const;
+
+/** Human-readable place labels for DMs / UI. */
+export const WEEKLY_PLACE_LABELS = ['1st', '2nd', '3rd', '4th', '5th'] as const;
+
+/**
+ * Format a player identity as a Sphere send/DM recipient.
+ * Prefer nametag (@handle); fall back to raw L1 / DIRECT address.
+ */
+export function resolvePayoutRecipient(input: {
+  nametag?: string | null;
+  displayName?: string | null;
+  did?: string | null;
+  walletAddress: string;
+}): string {
+  const candidates = [input.nametag, input.displayName, input.did];
+  for (const raw of candidates) {
+    if (!raw) continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    // Skip DID-looking or address-like values that are not nametags.
+    if (trimmed.startsWith('did:') || trimmed.startsWith('DIRECT://') || trimmed.startsWith('alpha1')) {
+      continue;
+    }
+    // Long hex keys are not nametags.
+    if (/^[0-9a-fA-F]{40,}$/.test(trimmed)) continue;
+    if (trimmed.startsWith('@')) return trimmed;
+    // Plain nametag (alphanumeric / underscore / hyphen)
+    if (/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(trimmed)) {
+      return `@${trimmed}`;
+    }
+  }
+  return input.walletAddress.trim();
+}
+
+/** Congrats copy after a successful weekly prize payout. */
+export function weeklyWinnerDmMessage(input: {
+  rank: number;
+  amountUct: string;
+  roundNumber: number;
+  score?: number;
+}): string {
+  const place =
+    WEEKLY_PLACE_LABELS[input.rank - 1] ?? `#${input.rank}`;
+  const scorePart =
+    typeof input.score === 'number' ? ` (score ${input.score})` : '';
+  return [
+    `Congrats! You placed ${place}${scorePart} on Sphere 2048 — weekly round #${input.roundNumber}.`,
+    `Your prize of ${input.amountUct} UCT has been sent from the weekly prize pool.`,
+    `Thanks for playing — good luck next week!`,
+  ].join(' ');
+}

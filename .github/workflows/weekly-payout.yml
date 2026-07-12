@@ -1,0 +1,81 @@
+# Free cron host for weekly settle → pay top 5 → Sphere DMs.
+# Public repos: free GitHub Actions minutes. No Railway/Fly needed.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions):
+#   SUPABASE_URL
+#   SUPABASE_SERVICE_ROLE_KEY
+#   TREASURY_MNEMONIC
+#
+# Optional secrets / vars:
+#   TREASURY_NAMETAG          (default 2048game)
+#   TREASURY_DEVICE_ID        (stable id for wallet-api; default sphere-2048-gh-actions)
+#   SPHERE_ORACLE_API_KEY     (public testnet2 key has a default in the worker)
+#   DRY_RUN                   (set "true" to settle/log only)
+
+name: Weekly payout (settle + pay + DM)
+
+on:
+  schedule:
+    # Every hour — settlement only acts when a weekly round has ended.
+    - cron: '15 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (no UCT sends / no DMs)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+concurrency:
+  group: weekly-payout
+  cancel-in-progress: false
+
+jobs:
+  settle-and-pay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/treasury-worker/package-lock.json
+
+      - name: Install treasury worker
+        working-directory: apps/treasury-worker
+        run: npm ci
+
+      # Persist local wallet/token files across runs so open transfer intents
+      # can resume if a previous job was interrupted mid-send.
+      - name: Cache treasury wallet data
+        uses: actions/cache@v4
+        with:
+          path: apps/treasury-worker/data
+          key: treasury-wallet-${{ github.run_id }}
+          restore-keys: |
+            treasury-wallet-
+
+      - name: Run settle + pay + DM
+        working-directory: apps/treasury-worker
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TREASURY_MNEMONIC: ${{ secrets.TREASURY_MNEMONIC }}
+          TREASURY_NAMETAG: ${{ secrets.TREASURY_NAMETAG }}
+          TREASURY_DEVICE_ID: ${{ secrets.TREASURY_DEVICE_ID || 'sphere-2048-gh-actions' }}
+          TREASURY_DATA_DIR: ./data/wallet
+          TREASURY_TOKENS_DIR: ./data/tokens
+          SPHERE_NETWORK: testnet2
+          SPHERE_ORACLE_API_KEY: ${{ secrets.SPHERE_ORACLE_API_KEY }}
+          SPHERE_WALLET_API_URL: https://wallet-api.unicity.network
+          MAX_PAY_ATTEMPTS: '5'
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || secrets.DRY_RUN }}
+        run: npm run settle-and-pay

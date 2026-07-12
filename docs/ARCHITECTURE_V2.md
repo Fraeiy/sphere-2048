@@ -7,14 +7,15 @@ Web3 2048 on Unicity Sphere SDK with Supabase backend, React frontend, and serve
 ```
 sphere-2048/
 ├── apps/
-│   └── web/                          # React + Vite + TypeScript + Tailwind
-│       ├── src/
-│       │   ├── components/           # Preserved UI (board, scores, leaderboard)
-│       │   ├── pages/                # Landing, Connect, Deposit, Game, Leaderboard, Profile, Weekly Pool
-│       │   ├── hooks/                # useSphereWallet, useSwipe
-│       │   ├── stores/               # Zustand: authStore, gameStore
-│       │   └── lib/                  # api.ts, supabase.ts (realtime)
-│       └── package.json
+│   ├── web/                          # React + Vite + TypeScript + Tailwind
+│   │   ├── src/
+│   │   │   ├── components/           # Preserved UI (board, scores, leaderboard)
+│   │   │   ├── pages/                # Landing, Connect, Deposit, Game, Leaderboard, Profile, Weekly Pool
+│   │   │   ├── hooks/                # useSphereWallet, useSwipe
+│   │   │   ├── stores/               # Zustand: authStore, gameStore
+│   │   │   └── lib/                  # api.ts, supabase.ts (realtime)
+│   │   └── package.json
+│   └── treasury-worker/              # Node cron: settle week → pay top 5 → Sphere DMs
 ├── packages/
 │   ├── game/                         # Pure 2048 engine (ported from game.js)
 │   └── shared/                       # Types, economy math, API contracts
@@ -170,13 +171,17 @@ React Query
 
 ## Weekly Prize Pool
 
-1. Each confirmed deposit contributes **10%** to `prize_pool_records`
+1. Each confirmed deposit contributes **50%** to `prize_pool_records`
 2. `weekly_rounds.prize_pool_atomic` accumulates total
-3. `settle-weekly-round` (cron at week end):
-   - Top 3 weekly scorers → `payout_records` at 50% / 30% / 20%
-   - Round status → `completed`
-   - New round created automatically
-4. Automatic on-chain payout: **architecture ready** (`payout_records.status` workflow); treasury send is phase 2
+3. **Treasury worker** (`apps/treasury-worker`) — single hourly cron:
+   1. Settle expired round → top **5** unique scorers → `payout_records` at **35% / 25% / 20% / 15% / 5%**
+   2. Open next weekly round
+   3. Auto-send UCT from treasury Sphere wallet (`payments.send`)
+   4. Sphere DM congrats (`communications.sendDM`) after successful pay
+4. Status flow: `pending` → `sent` (+ `tx_hash`, `sent_at`) → `dm_sent_at` set  
+   Failures: `failed` + `failure_reason`, retried up to `MAX_PAY_ATTEMPTS`
+5. Edge `settle-weekly-round` remains for manual/admin settle (creates `pending` only; no pay/DM)
+
 
 ## Realtime Leaderboard
 
@@ -206,9 +211,11 @@ supabase functions deploy
 # 2. Frontend (Vercel/Netlify)
 cd apps/web && npm install && npm run build
 
-# 3. Cron (weekly settlement)
-# Schedule POST /functions/v1/settle-weekly-round with x-cron-secret header
+# 3. Cron (weekly settlement + auto-pay + DMs) — free via GitHub Actions
+# See .github/workflows/weekly-payout.yml (hourly schedule + manual run).
+# Or: cd apps/treasury-worker && npm run settle-and-pay  (Task Scheduler / crontab)
 ```
+
 
 ## Environment Variables
 
@@ -218,6 +225,8 @@ cd apps/web && npm install && npm run build
 | `SUPABASE_SERVICE_ROLE_KEY` | Edge Functions | Bypass RLS |
 | `JWT_SECRET` | Edge Functions | Player JWT signing |
 | `FRONTEND_URL` | Edge Functions | CORS |
-| `CRON_SECRET` | settle-weekly-round | Cron auth |
+| `CRON_SECRET` | settle-weekly-round | Cron auth (Edge fallback) |
 | `VITE_SUPABASE_*` | React | Client + realtime |
-| `VITE_GAME_TREASURY_ADDRESS` | React | Deposit destination |
+| `VITE_GAME_TREASURY_NAMETAG` | React | Deposit destination |
+| `TREASURY_MNEMONIC` | treasury-worker | Server Sphere wallet for auto-pay |
+| `SUPABASE_SERVICE_ROLE_KEY` | treasury-worker | Settle + update payouts |

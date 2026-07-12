@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "npm run dev --prefix apps/web",
     "build": "npm run build --prefix apps/web",
-    "typecheck": "npm run typecheck --prefix apps/web"
+    "typecheck": "npm run typecheck --prefix apps/web",
+    "settle-and-pay": "npm run settle-and-pay --prefix apps/treasury-worker",
+    "treasury:install": "npm install --prefix apps/treasury-worker"
   }
 }

@@ -1,0 +1,27 @@
+{
+  "name": "@sphere-2048/treasury-worker",
+  "version": "2.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Weekly settle → auto-pay top 5 → Sphere congrats DMs",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "settle-and-pay": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@sphere-2048/shared": "file:../../packages/shared",
+    "@supabase/supabase-js": "^2.49.1",
+    "@unicitylabs/sphere-sdk": "0.11.9",
+    "dotenv": "^16.4.7",
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

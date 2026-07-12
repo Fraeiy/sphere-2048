@@ -1,3 +1,7 @@
+/**
+ * Manual / admin settle: creates pending payout_records and opens the next week.
+ * Production auto-pay + Sphere DMs run in apps/treasury-worker (settle + pay + DM).
+ */
 import { handleCors, jsonResponse, errorResponse } from '../_shared/cors.ts';
 import { createServiceClient } from '../_shared/supabase.ts';
 
