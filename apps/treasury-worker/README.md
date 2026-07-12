@@ -89,13 +89,16 @@ Settlement only acts when `weekly_rounds.ends_at < now()` and status is `active`
 | DM after pay | DMs only after successful pay; missing DMs retried while `dm_sent_at` is null |
 | Attempt cap | `MAX_PAY_ATTEMPTS` (default 5) stops endless failed retries |
 | Recipient | Prefer `@nametag` from `players.display_name` / nametag-like `did`, else wallet address |
-| Partial / multi-token | `amount_paid_atomic` tracks progress; envelope-too-big falls back to ≤1 UCT chunks |
+| Pay splits | **Max 2** `payments.send` calls per prize: full amount, or two halves if envelope is too large |
+| Partial pay | `amount_paid_atomic` tracks progress if a half-send fails mid-way |
 
-## Why wallet history looks “messy”
+## Payment shape
 
-Unicity UCT is **bearer tokens**, not a single balance row. Deposits land as many small tokens (1 / 5 / 10 UCT). Paying a prize **spends those tokens**, so Sphere may show **many “Received from @2048game” lines** that **add up to the prize total** — not multiple full prizes.
+- Default: **1 send** for the full prize  
+- If wallet-api rejects with envelope-too-large: **exactly 2 sends** (half + half), memos `part 1/2` and `part 2/2`  
+- **No** 1-UCT micro-chunk spam  
 
-Example: rank 2 prize **10.25 UCT** can look like eight `+1 UCT` plus two fractional lines. Memos now include the **total** (`… · 10.25 UCT total`) so history is readable.
+Note: Unicity may still show multiple small “Received” lines *inside* one send (token unpack). That is protocol UI, not extra `send()` calls from us.
 
 ## Env
 

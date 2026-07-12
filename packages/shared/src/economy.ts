@@ -107,9 +107,7 @@ export function weeklyWinnerDmMessage(input: {
     typeof input.score === 'number' ? ` (score ${input.score})` : '';
   return [
     `Congrats! You placed ${place}${scorePart} on Sphere 2048 — weekly round #${input.roundNumber}.`,
-    `Your prize of ${input.amountUct} UCT has been sent from the weekly prize pool.`,
-    // Unicity delivers bearer tokens; one prize can show as several "Received" lines that sum to this total.
-    `If history shows multiple small receives, they are parts of this single prize (total ${input.amountUct} UCT).`,
+    `Your prize of ${input.amountUct} UCT has been sent from the weekly prize pool (1–2 transfers).`,
     `Thanks for playing — good luck next week!`,
   ].join(' ');
 }

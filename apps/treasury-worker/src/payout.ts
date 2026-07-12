@@ -8,6 +8,9 @@ import type { TreasurySphere } from './sphere.js';
 import { resolveUctCoinId, sphereErrorInfo } from './sphere.js';
 import type { Db } from './supabase.js';
 
+/** Hard cap: each prize is at most this many `payments.send` calls (never 1-UCT spam). */
+const MAX_SEND_SPLITS = 2;
+
 interface PayoutRow {
   id: string;
   weekly_round_id: string;
@@ -41,9 +44,6 @@ export interface PaySummary {
   dmsSent: number;
   dmsFailed: number;
 }
-
-/** Max atomic amount per send() when chunking (keeps wallet-api envelope under 4KB). */
-const CHUNK_ATOMIC = UCT_ATOMIC_PER_TOKEN; // 1 UCT
 
 function amountString(atomic: string | number): string {
   if (typeof atomic === 'number') {
@@ -89,9 +89,8 @@ async function loadRoundMap(db: Db, roundIds: string[]): Promise<Map<string, Rou
  * Pay pending/failed payouts from the treasury Sphere wallet, then send congrats DMs.
  * Idempotent: never re-sends when status is already `sent` with a tx_hash.
  *
- * Unicity note: one logical prize often consumes many small deposit-sized tokens.
- * The wallet history then shows multiple "Received" lines that SUM to the prize —
- * that is protocol behavior, not double-pay.
+ * Unicity note: one send may still unpack to multiple small token deliveries in the
+ * wallet UI. We only issue at most {@link MAX_SEND_SPLITS} SDK send() calls per prize.
  */
 export async function executePendingPayouts(
   db: Db,
@@ -322,6 +321,12 @@ export async function executePendingPayouts(
   return summary;
 }
 
+/**
+ * Pay remaining prize amount with at most {@link MAX_SEND_SPLITS} sends:
+ * 1) one full send, or
+ * 2) if that fails envelope size → exactly two halves (part 1/2 + part 2/2).
+ * No 1-UCT micro-chunks.
+ */
 async function sendPrizeAmount(
   sphere: TreasurySphere,
   opts: {
@@ -336,69 +341,61 @@ async function sendPrizeAmount(
 ): Promise<{ paidTotal: bigint; refs: string[] }> {
   const refs: string[] = [];
   let paid = opts.alreadyPaid;
-  let remaining = opts.remaining;
+  const remaining = opts.remaining;
 
-  const memoFor = (chunk: bigint, part?: number, parts?: number) => {
+  if (remaining <= 0n) {
+    return { paidTotal: paid, refs };
+  }
+
+  const memoFor = (part: number, parts: number) => {
     const base = `Sphere 2048 weekly prize rank ${opts.rank} · ${opts.totalUct} UCT total`;
-    if (part != null && parts != null && parts > 1) {
-      return `${base} · part ${part}/${parts}`;
-    }
-    if (chunk < opts.total) {
-      return `${base} · chunk ${formatUct(chunk)} UCT`;
-    }
-    return base;
+    return parts <= 1 ? base : `${base} · part ${part}/${parts}`;
   };
 
-  // 1) Try full remainder in one SDK send (may still appear as many history rows).
-  try {
+  const doSend = async (amount: bigint, part: number, parts: number) => {
     const result = await sphere.payments.send({
       recipient: opts.recipient,
-      amount: remaining.toString(),
+      amount: amount.toString(),
       coinId: opts.coinId,
-      memo: memoFor(remaining),
+      memo: memoFor(part, parts),
     });
     const txRef =
       (result as { id?: string }).id ??
       (result as { transferId?: string }).transferId ??
-      `full-${Date.now()}`;
+      `pay-${part}-${Date.now()}`;
     refs.push(String(txRef));
-    paid += remaining;
+    paid += amount;
     console.log(
-      `[payout] single send ok ${formatUct(remaining)} UCT → ${opts.recipient} ref=${txRef}` +
-        ((result as { deliveryPending?: boolean }).deliveryPending ? ' (delivery pending)' : ''),
+      `[payout] send ${part}/${parts} ${formatUct(amount)} UCT → ${opts.recipient} ref=${txRef}` +
+        ((result as { deliveryPending?: boolean }).deliveryPending
+          ? ' (delivery pending)'
+          : ''),
     );
+  };
+
+  // 1) Prefer a single send for the full remainder.
+  try {
+    await doSend(remaining, 1, 1);
     return { paidTotal: paid, refs };
   } catch (err) {
     const info = sphereErrorInfo(err);
     if (info.certificationUnconfirmed) throw err;
     if (!isEnvelopeError(info.message)) throw err;
     console.warn(
-      `[payout] full send hit envelope limit — chunking into ≤1 UCT pieces: ${info.message}`,
+      `[payout] full send hit envelope limit — retrying as exactly ${MAX_SEND_SPLITS} splits: ${info.message}`,
     );
   }
 
-  // 2) Chunk into ≤1 UCT sends so wallet-api envelope stays small.
-  const parts = Number((remaining + CHUNK_ATOMIC - 1n) / CHUNK_ATOMIC);
-  let part = 0;
-  while (remaining > 0n) {
-    part += 1;
-    const chunk = remaining > CHUNK_ATOMIC ? CHUNK_ATOMIC : remaining;
-    const result = await sphere.payments.send({
-      recipient: opts.recipient,
-      amount: chunk.toString(),
-      coinId: opts.coinId,
-      memo: memoFor(chunk, part, parts),
-    });
-    const txRef =
-      (result as { id?: string }).id ??
-      (result as { transferId?: string }).transferId ??
-      `chunk-${part}-${Date.now()}`;
-    refs.push(String(txRef));
-    paid += chunk;
-    remaining -= chunk;
-    console.log(
-      `[payout] chunk ${part}/${parts} ${formatUct(chunk)} UCT → ${opts.recipient} ref=${txRef}`,
-    );
+  // 2) At most two splits: ceil(half) then remainder.
+  if (MAX_SEND_SPLITS < 2) {
+    throw new Error('Full send failed and MAX_SEND_SPLITS < 2 — cannot split further');
+  }
+
+  const first = (remaining + 1n) / 2n; // ceil(remaining / 2)
+  const second = remaining - first;
+  await doSend(first, 1, 2);
+  if (second > 0n) {
+    await doSend(second, 2, 2);
   }
 
   return { paidTotal: paid, refs };
