@@ -125,6 +125,8 @@ export interface PayoutRecord {
   player_id: string;
   rank: number;
   amount_atomic: number | string;
+  /** Atomic UCT already delivered when a prize is paid in multiple token chunks. */
+  amount_paid_atomic: number | string;
   wallet_address: string;
   status: PayoutStatus;
   tx_hash: string | null;

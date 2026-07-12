@@ -1,6 +1,7 @@
 import {
   resolvePayoutRecipient,
   weeklyWinnerDmMessage,
+  UCT_ATOMIC_PER_TOKEN,
 } from '@sphere-2048/shared';
 import { config } from './config.js';
 import type { TreasurySphere } from './sphere.js';
@@ -13,6 +14,7 @@ interface PayoutRow {
   player_id: string;
   rank: number;
   amount_atomic: string | number;
+  amount_paid_atomic?: string | number | null;
   wallet_address: string;
   status: string;
   tx_hash: string | null;
@@ -40,12 +42,23 @@ export interface PaySummary {
   dmsFailed: number;
 }
 
+/** Max atomic amount per send() when chunking (keeps wallet-api envelope under 4KB). */
+const CHUNK_ATOMIC = UCT_ATOMIC_PER_TOKEN; // 1 UCT
+
 function amountString(atomic: string | number): string {
-  // Avoid scientific notation; keep integer string for Sphere amount.
   if (typeof atomic === 'number') {
     return BigInt(Math.trunc(atomic)).toString();
   }
   return String(atomic).split('.')[0] ?? '0';
+}
+
+function toBig(atomic: string | number | null | undefined): bigint {
+  if (atomic == null) return 0n;
+  return BigInt(amountString(atomic));
+}
+
+function isEnvelopeError(message: string): boolean {
+  return /envelope exceeds|VALIDATION_FAILED|too large|4096/i.test(message);
 }
 
 async function loadPlayerMap(db: Db, playerIds: string[]): Promise<Map<string, PlayerRow>> {
@@ -75,6 +88,10 @@ async function loadRoundMap(db: Db, roundIds: string[]): Promise<Map<string, Rou
 /**
  * Pay pending/failed payouts from the treasury Sphere wallet, then send congrats DMs.
  * Idempotent: never re-sends when status is already `sent` with a tx_hash.
+ *
+ * Unicity note: one logical prize often consumes many small deposit-sized tokens.
+ * The wallet history then shows multiple "Received" lines that SUM to the prize —
+ * that is protocol behavior, not double-pay.
  */
 export async function executePendingPayouts(
   db: Db,
@@ -91,7 +108,7 @@ export async function executePendingPayouts(
   const { data: rows, error } = await db
     .from('payout_records')
     .select(
-      'id, weekly_round_id, player_id, rank, amount_atomic, wallet_address, status, tx_hash, attempt_count, dm_sent_at, recipient',
+      'id, weekly_round_id, player_id, rank, amount_atomic, amount_paid_atomic, wallet_address, status, tx_hash, attempt_count, dm_sent_at, recipient',
     )
     .in('status', ['pending', 'failed'])
     .order('rank', { ascending: true })
@@ -99,11 +116,10 @@ export async function executePendingPayouts(
 
   if (error) throw error;
 
-  // Also pick up `sent` rows missing DMs (pay succeeded, DM failed last run).
   const { data: needDm, error: dmErr } = await db
     .from('payout_records')
     .select(
-      'id, weekly_round_id, player_id, rank, amount_atomic, wallet_address, status, tx_hash, attempt_count, dm_sent_at, recipient',
+      'id, weekly_round_id, player_id, rank, amount_atomic, amount_paid_atomic, wallet_address, status, tx_hash, attempt_count, dm_sent_at, recipient',
     )
     .eq('status', 'sent')
     .is('dm_sent_at', null)
@@ -147,9 +163,24 @@ export async function executePendingPayouts(
         walletAddress: row.wallet_address,
       });
 
-    const amount = amountString(row.amount_atomic);
-    if (amount === '0') {
+    const total = toBig(row.amount_atomic);
+    let paid = toBig(row.amount_paid_atomic);
+    if (total <= 0n) {
       summary.skipped += 1;
+      continue;
+    }
+    if (paid >= total) {
+      // Already fully delivered but status not flipped — heal row.
+      await db
+        .from('payout_records')
+        .update({
+          status: 'sent',
+          sent_at: new Date().toISOString(),
+          failure_reason: null,
+          recipient,
+        })
+        .eq('id', row.id);
+      summary.paid += 1;
       continue;
     }
 
@@ -163,33 +194,49 @@ export async function executePendingPayouts(
       })
       .eq('id', row.id);
 
+    const remaining = total - paid;
+    const totalUct = formatUct(total);
+
     if (config.dryRun || !sphere) {
       console.log(
-        `[payout:dry-run] would pay rank ${row.rank} → ${recipient} amount=${amount}`,
+        `[payout:dry-run] would pay rank ${row.rank} → ${recipient} remaining=${remaining} / total=${total} (${totalUct} UCT)`,
       );
       summary.skipped += 1;
       continue;
     }
 
     try {
-      const result = await sphere.payments.send({
+      const refs: string[] = [];
+
+      // Prefer a single send for the remainder; fall back to 1-UCT chunks if envelope is too big.
+      const sendResult = await sendPrizeAmount(sphere, {
         recipient,
-        amount,
         coinId,
-        memo: `Sphere 2048 weekly prize rank ${row.rank}`,
+        remaining,
+        alreadyPaid: paid,
+        total,
+        rank: row.rank,
+        totalUct,
       });
 
-      const txRef =
-        (result as { id?: string; transferId?: string }).id ??
-        (result as { transferId?: string }).transferId ??
-        `sphere-${row.id}`;
+      paid = sendResult.paidTotal;
+      refs.push(...sendResult.refs);
 
-      const status = (result as { status?: string }).status;
-      // completed / deliveryPending both count as paid (token certified).
-      if (status && status !== 'completed' && status !== 'delivered' && status !== 'confirmed') {
-        // Still treat completed-or-better; if ambiguous completed is success path above
+      await db
+        .from('payout_records')
+        .update({
+          amount_paid_atomic: paid.toString(),
+          recipient,
+        })
+        .eq('id', row.id);
+
+      if (paid < total) {
+        throw new Error(
+          `Partial pay ${paid}/${total} atomic — will retry remaining on next run`,
+        );
       }
 
+      const txRef = refs[0] ?? `sphere-${row.id}`;
       const { error: updateErr } = await db
         .from('payout_records')
         .update({
@@ -197,6 +244,7 @@ export async function executePendingPayouts(
           tx_hash: String(txRef),
           sent_at: new Date().toISOString(),
           failure_reason: null,
+          amount_paid_atomic: total.toString(),
           recipient,
         })
         .eq('id', row.id)
@@ -205,27 +253,28 @@ export async function executePendingPayouts(
       if (updateErr) throw updateErr;
 
       console.log(
-        `[payout] sent rank ${row.rank} → ${recipient} amount=${amount} ref=${txRef}` +
-          ((result as { deliveryPending?: boolean }).deliveryPending
-            ? ' (delivery pending)'
-            : ''),
+        `[payout] sent rank ${row.rank} → ${recipient} total=${totalUct} UCT refs=${refs.length}`,
       );
       summary.paid += 1;
 
-      const dmOk = await sendWinnerDm(db, sphere, {
-        ...row,
-        status: 'sent',
-        tx_hash: String(txRef),
-        recipient,
-      }, players, rounds);
+      const dmOk = await sendWinnerDm(
+        db,
+        sphere,
+        {
+          ...row,
+          status: 'sent',
+          tx_hash: String(txRef),
+          recipient,
+        },
+        players,
+        rounds,
+      );
       if (dmOk) summary.dmsSent += 1;
       else summary.dmsFailed += 1;
     } catch (err) {
       const info = sphereErrorInfo(err);
 
       if (info.certificationUnconfirmed) {
-        // Possibly already on-chain — DO NOT re-send next time as a fresh transfer.
-        // Mark as sent with placeholder so we don't double-pay; resumeOpenIntents will finish.
         const ref = `unconfirmed-${row.id}`;
         await db
           .from('payout_records')
@@ -249,6 +298,7 @@ export async function executePendingPayouts(
         .update({
           status: 'failed',
           failure_reason: info.message.slice(0, 500),
+          amount_paid_atomic: paid.toString(),
           recipient,
         })
         .eq('id', row.id);
@@ -258,7 +308,6 @@ export async function executePendingPayouts(
     }
   }
 
-  // Retry DMs for already-paid winners.
   for (const row of dmOnlyQueue) {
     if (config.dryRun || !sphere) {
       console.log(`[payout:dry-run] would DM ${row.recipient ?? row.wallet_address}`);
@@ -271,6 +320,88 @@ export async function executePendingPayouts(
   }
 
   return summary;
+}
+
+async function sendPrizeAmount(
+  sphere: TreasurySphere,
+  opts: {
+    recipient: string;
+    coinId: string;
+    remaining: bigint;
+    alreadyPaid: bigint;
+    total: bigint;
+    rank: number;
+    totalUct: string;
+  },
+): Promise<{ paidTotal: bigint; refs: string[] }> {
+  const refs: string[] = [];
+  let paid = opts.alreadyPaid;
+  let remaining = opts.remaining;
+
+  const memoFor = (chunk: bigint, part?: number, parts?: number) => {
+    const base = `Sphere 2048 weekly prize rank ${opts.rank} · ${opts.totalUct} UCT total`;
+    if (part != null && parts != null && parts > 1) {
+      return `${base} · part ${part}/${parts}`;
+    }
+    if (chunk < opts.total) {
+      return `${base} · chunk ${formatUct(chunk)} UCT`;
+    }
+    return base;
+  };
+
+  // 1) Try full remainder in one SDK send (may still appear as many history rows).
+  try {
+    const result = await sphere.payments.send({
+      recipient: opts.recipient,
+      amount: remaining.toString(),
+      coinId: opts.coinId,
+      memo: memoFor(remaining),
+    });
+    const txRef =
+      (result as { id?: string }).id ??
+      (result as { transferId?: string }).transferId ??
+      `full-${Date.now()}`;
+    refs.push(String(txRef));
+    paid += remaining;
+    console.log(
+      `[payout] single send ok ${formatUct(remaining)} UCT → ${opts.recipient} ref=${txRef}` +
+        ((result as { deliveryPending?: boolean }).deliveryPending ? ' (delivery pending)' : ''),
+    );
+    return { paidTotal: paid, refs };
+  } catch (err) {
+    const info = sphereErrorInfo(err);
+    if (info.certificationUnconfirmed) throw err;
+    if (!isEnvelopeError(info.message)) throw err;
+    console.warn(
+      `[payout] full send hit envelope limit — chunking into ≤1 UCT pieces: ${info.message}`,
+    );
+  }
+
+  // 2) Chunk into ≤1 UCT sends so wallet-api envelope stays small.
+  const parts = Number((remaining + CHUNK_ATOMIC - 1n) / CHUNK_ATOMIC);
+  let part = 0;
+  while (remaining > 0n) {
+    part += 1;
+    const chunk = remaining > CHUNK_ATOMIC ? CHUNK_ATOMIC : remaining;
+    const result = await sphere.payments.send({
+      recipient: opts.recipient,
+      amount: chunk.toString(),
+      coinId: opts.coinId,
+      memo: memoFor(chunk, part, parts),
+    });
+    const txRef =
+      (result as { id?: string }).id ??
+      (result as { transferId?: string }).transferId ??
+      `chunk-${part}-${Date.now()}`;
+    refs.push(String(txRef));
+    paid += chunk;
+    remaining -= chunk;
+    console.log(
+      `[payout] chunk ${part}/${parts} ${formatUct(chunk)} UCT → ${opts.recipient} ref=${txRef}`,
+    );
+  }
+
+  return { paidTotal: paid, refs };
 }
 
 async function sendWinnerDm(
@@ -292,8 +423,7 @@ async function sendWinnerDm(
     });
 
   const round = rounds.get(row.weekly_round_id);
-  const amountAtomic = BigInt(amountString(row.amount_atomic));
-  // Prefer full precision string without float junk when possible.
+  const amountAtomic = toBig(row.amount_atomic);
   const amountUct = formatUct(amountAtomic);
 
   const message = weeklyWinnerDmMessage({
@@ -329,9 +459,8 @@ async function sendWinnerDm(
 }
 
 function formatUct(amountAtomic: bigint): string {
-  // UCT_DECIMALS = 18 in shared; avoid huge float errors for display.
-  const whole = amountAtomic / 10n ** 18n;
-  const frac = amountAtomic % 10n ** 18n;
+  const whole = amountAtomic / UCT_ATOMIC_PER_TOKEN;
+  const frac = amountAtomic % UCT_ATOMIC_PER_TOKEN;
   if (frac === 0n) return whole.toString();
   const fracStr = frac.toString().padStart(18, '0').replace(/0+$/, '');
   return `${whole}.${fracStr}`;

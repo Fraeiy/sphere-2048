@@ -89,6 +89,13 @@ Settlement only acts when `weekly_rounds.ends_at < now()` and status is `active`
 | DM after pay | DMs only after successful pay; missing DMs retried while `dm_sent_at` is null |
 | Attempt cap | `MAX_PAY_ATTEMPTS` (default 5) stops endless failed retries |
 | Recipient | Prefer `@nametag` from `players.display_name` / nametag-like `did`, else wallet address |
+| Partial / multi-token | `amount_paid_atomic` tracks progress; envelope-too-big falls back to ≤1 UCT chunks |
+
+## Why wallet history looks “messy”
+
+Unicity UCT is **bearer tokens**, not a single balance row. Deposits land as many small tokens (1 / 5 / 10 UCT). Paying a prize **spends those tokens**, so Sphere may show **many “Received from @2048game” lines** that **add up to the prize total** — not multiple full prizes.
+
+Example: rank 2 prize **10.25 UCT** can look like eight `+1 UCT` plus two fractional lines. Memos now include the **total** (`… · 10.25 UCT total`) so history is readable.
 
 ## Env
 
