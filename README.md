@@ -64,7 +64,38 @@ Every week, a slice of all deposits goes into a shared prize pool.
 
 Check the **Scores** tab → **Weekly** to see the current pool size and who's leading.
 
-At week end a **treasury worker** settles the round, pays the top 5 from the pool automatically, and sends each winner a **Sphere DM** with congrats and payment confirmation. It runs for free on **GitHub Actions** (hourly) — no Railway/Fly. See [`apps/treasury-worker/README.md`](apps/treasury-worker/README.md).
+---
+
+## Autonomous treasury agent (auto-pay + DMs)
+
+Sphere 2048 doesn’t stop at “show a leaderboard.” When a weekly round ends, a small **treasury agent** closes the week and pays winners **without a human in the loop**.
+
+### What it does each run
+
+1. **Settle** — if the active week’s `ends_at` has passed, lock top **5** unique scorers, write `payout_records` (35/25/20/15/5), mark the round completed, open the next week  
+2. **Pay** — send UCT from the game treasury (`@2048game`) via the **Sphere SDK** (`payments.send`)  
+3. **Notify** — send each winner a **Sphere DM** with place, amount, and congrats (`communications.sendDM`)
+
+### Design choices
+
+| Concern | Approach |
+|---------|----------|
+| Hosting cost | **GitHub Actions** hourly cron (free on public repos) — no Railway/Fly |
+| Auth | Treasury **mnemonic** + Supabase **service role** as Actions secrets |
+| Pay shape | Prefer **1 transfer** per prize; on envelope size limits, **at most 2 splits** (half + half) — no micro-chunk spam |
+| Safety | Idempotent rows (`pending` → `sent` + `tx_hash`); `CERTIFICATION_UNCONFIRMED` never double-sends; retries for failed pays / missing DMs |
+| Recipient | Prefer `@nametag`, fall back to wallet address |
+
+### Where it lives
+
+| Path | Role |
+|------|------|
+| [`apps/treasury-worker/`](apps/treasury-worker/) | Node agent: settle + pay + DM |
+| [`.github/workflows/weekly-payout.yml`](.github/workflows/weekly-payout.yml) | Free hourly schedule + manual “Run workflow” |
+| `supabase/functions/settle-weekly-round` | Optional admin-only settle (creates `pending` payouts; **no** pay/DM) |
+
+Full setup (secrets, dry-run, Task Scheduler fallback): **[`apps/treasury-worker/README.md`](apps/treasury-worker/README.md)**  
+Architecture notes: **[`docs/ARCHITECTURE_V2.md`](docs/ARCHITECTURE_V2.md)**
 
 ---
 
