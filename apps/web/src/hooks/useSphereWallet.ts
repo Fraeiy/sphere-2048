@@ -151,14 +151,37 @@ export function useSphereWallet() {
     const coinId = await resolveUctCoinId(client);
     const to = formatTreasuryRecipient(treasuryRecipient);
 
-    const result = await client.intent<{ txHash?: string; hash?: string }>('send', {
+    // Connect send result (SDK ≥0.9): { success, transferId?, status, deliveryPending }
+    // transferId is the stable idempotency key for process-deposit (tx_hash column).
+    const result = await client.intent<{
+      success?: boolean;
+      transferId?: string;
+      status?: string;
+      deliveryPending?: boolean;
+      txHash?: string;
+      hash?: string;
+    }>('send', {
       to,
       amount: uctToAtomic(amountUct).toString(),
       coinId,
       memo,
     });
 
-    return { txHash: result.txHash ?? result.hash ?? crypto.randomUUID() };
+    if (result.success === false) {
+      throw new Error('Wallet rejected the deposit transfer');
+    }
+
+    const txHash =
+      result.transferId ??
+      result.txHash ??
+      result.hash ??
+      crypto.randomUUID();
+
+    return {
+      txHash,
+      deliveryPending: Boolean(result.deliveryPending),
+      status: result.status,
+    };
   }, []);
 
   return { connect, disconnect, connecting, connectError, sendDeposit, walletUrl: WALLET_URL };
