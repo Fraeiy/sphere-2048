@@ -10,7 +10,7 @@
  *   cd apps/treasury-worker && npm run settle-and-pay
  */
 import { assertTreasurySecrets, config } from './config.js';
-import { executePendingPayouts } from './payout.js';
+import { executePendingPayouts, hasPendingPayoutWork } from './payout.js';
 import { settleExpiredRound } from './settle.js';
 import { initTreasurySphere } from './sphere.js';
 import { createDb } from './supabase.js';
@@ -32,12 +32,20 @@ async function main() {
     payoutsCreated: settle.payoutsCreated,
   });
 
-  // 2–3) Pay + DM (also retries failed pays / missing DMs from prior weeks)
+  // 2–3) Pay + DM only if work remains (skip heavy Sphere SDK init on idle hours)
+  const needsPay = await hasPendingPayoutWork(db);
+  if (!needsPay) {
+    console.log('[worker] no pending pays/DMs — skip Sphere wallet init');
+    console.log('[worker] done');
+    return;
+  }
+
   assertTreasurySecrets(!config.dryRun);
 
   let sphereHandle: Awaited<ReturnType<typeof initTreasurySphere>> | null = null;
   try {
     if (!config.dryRun) {
+      console.log('[worker] pending work found — initializing treasury Sphere wallet…');
       sphereHandle = await initTreasurySphere();
       const { sphere, created, generatedMnemonic } = sphereHandle;
       if (created && generatedMnemonic) {

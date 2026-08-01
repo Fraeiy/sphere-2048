@@ -85,6 +85,24 @@ async function loadRoundMap(db: Db, roundIds: string[]): Promise<Map<string, Rou
   return map;
 }
 
+/** True if there is anything left to pay or DM (skip Sphere wallet init when false). */
+export async function hasPendingPayoutWork(db: Db): Promise<boolean> {
+  const { count: payCount, error: payErr } = await db
+    .from('payout_records')
+    .select('id', { count: 'exact', head: true })
+    .in('status', ['pending', 'failed']);
+  if (payErr) throw payErr;
+  if ((payCount ?? 0) > 0) return true;
+
+  const { count: dmCount, error: dmErr } = await db
+    .from('payout_records')
+    .select('id', { count: 'exact', head: true })
+    .eq('status', 'sent')
+    .is('dm_sent_at', null);
+  if (dmErr) throw dmErr;
+  return (dmCount ?? 0) > 0;
+}
+
 /**
  * Pay pending/failed payouts from the treasury Sphere wallet, then send congrats DMs.
  * Idempotent: never re-sends when status is already `sent` with a tx_hash.
