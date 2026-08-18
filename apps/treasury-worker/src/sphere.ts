@@ -9,14 +9,13 @@ export type TreasurySphere = Awaited<ReturnType<typeof initTreasurySphere>>['sph
 
 export async function initTreasurySphere() {
   await mkdir(config.dataDir, { recursive: true });
-  await mkdir(config.tokensDir, { recursive: true });
 
   const network = config.network === 'testnet2' ? 'testnet' : config.network;
 
+  // SDK 0.14+: createNodeProviders only takes dataDir (tokens live in wallet-api inventory).
   const base = createNodeProviders({
     network,
     dataDir: config.dataDir,
-    tokensDir: config.tokensDir,
     oracle: {
       apiKey: config.oracleApiKey,
     },
@@ -46,13 +45,12 @@ export async function initTreasurySphere() {
   const { sphere, created, generatedMnemonic } = await Sphere.init(initOpts);
 
   // Resume any indeterminate sends from prior runs (money-safety).
+  // SDK 0.14 renamed resumeOpenIntents → resumeNow.
   try {
-    const resumed = await sphere.payments.resumeOpenIntents();
-    if (resumed && (resumed.resumed || resumed.conflicted || resumed.failed)) {
-      console.log('[sphere] resumeOpenIntents', resumed);
-    }
+    await sphere.payments.resumeNow();
+    console.log('[sphere] resumeNow completed');
   } catch (err) {
-    console.warn('[sphere] resumeOpenIntents failed (continuing)', err);
+    console.warn('[sphere] resumeNow failed (continuing)', err);
   }
 
   // Drain mailbox so balance is current before pays.
